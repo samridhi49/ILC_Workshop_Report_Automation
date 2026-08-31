@@ -82,3 +82,5 @@ __This might be something worth exploring:__
 - Click ``Run`` to create the slide
 
 There's also ways to add graphs and customize the ppt based on a selected range of data but might have to look more into that.
+
+Power Query and Power BI--didn't read too much about them but might be better alternative to VBA? Looks like it might involve some software download though.
