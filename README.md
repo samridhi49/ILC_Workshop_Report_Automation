@@ -82,5 +82,3 @@ __This might be something worth exploring:__
 - Click ``Run`` to create the slide
 
 There's also ways to add graphs and customize the ppt based on a selected range of data but might have to look more into that
-
-https://support.microsoft.com/en-us/powerpoint/insert-and-update-excel-data-in-powerpoint
