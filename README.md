@@ -8,6 +8,7 @@
 ## Samridhi 
 
 https://python-pptx.readthedocs.io/en/latest/
+https://support.microsoft.com/en-us/word/use-mail-merge-for-bulk-email-letters-labels-and-envelopes
 
 **VBA**
 <br>
