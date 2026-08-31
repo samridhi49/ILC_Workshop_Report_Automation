@@ -18,7 +18,7 @@ https://learn.microsoft.com/en-us/office/vba/library-reference/concepts/getting-
 __This might be something worth exploring:__
 
 ### Steps to Connect Excel and PowerPoint
-- Open VBA Editor (alt + F11)
+- Open VBA Editor ``alt + F11``
 - Tools -> References in the top menu
 - Scroll down to find `Microsoft PowerPoint 16.0 Object Library`
 - Select the box next to it and click `OK`
@@ -81,4 +81,4 @@ __This might be something worth exploring:__
 - Select the macro
 - Click ``Run`` to create the slide
 
-There's also ways to add graphs and customize the ppt based on a selected range of data but might have to look more into that
+There's also ways to add graphs and customize the ppt based on a selected range of data but might have to look more into that.
