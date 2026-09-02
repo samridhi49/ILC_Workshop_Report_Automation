@@ -1,0 +1,73 @@
+Sub CreateSlides()
+  Dim pptApp As Object
+  Dim pptPres As Object
+  Dim pptSlide As Object
+  
+  ' Use generic Object instead of Excel.Worksheet
+  Dim xlApp As Object
+  Dim xlWB As Object
+  Dim ws As Object
+  
+  Dim lastRow As Long
+  Dim i As Long
+  Dim slideIndex As Long
+  
+  ' Look for an already open instance of Excel
+  On Error Resume Next
+  Set xlApp = GetObject(, "Excel.Application")
+  On Error GoTo 0
+  
+  ' If Excel isn't open, alert user and exit
+  If xlApp Is Nothing Then
+      MsgBox "Please open your Excel file first!", vbCritical
+      Exit Sub
+  End If
+  
+  ' Reference the active worksheet in the open Excel window
+  Set ws = xlApp.ActiveSheet
+  
+  ' Find the last row with data in Column A
+  lastRow = ws.Cells(ws.Rows.Count, "A").End(-4162).Row ' -4162 is the raw value for xlUp
+  
+  ' Create PowerPoint application connection
+  Set pptApp = CreateObject("PowerPoint.Application")
+  pptApp.Visible = True
+  
+  ' Create a new presentation
+  Set pptPres = pptApp.Presentations.Add
+  
+  slideIndex = 1
+  
+  ' Loop through rows starting from row 1 (change to 2 if you have headers)
+  For i = 1 To lastRow
+      ' Add a new slide (11 represents title/object layout)
+      Set pptSlide = pptPres.Slides.Add(slideIndex, 11)
+      
+      ' Populate slide text from Columns A and B
+      With pptSlide
+          If .Shapes.HasTitle Then
+              .Shapes.Title.TextFrame.TextRange.Text = CStr(ws.Cells(i, "A").Value)
+          End If
+          
+          If .Shapes.Count >= 2 Then
+              .Shapes(2).TextFrame.TextRange.Text = CStr(ws.Cells(i, "B").Value)
+          End If
+      End With
+      
+      slideIndex = slideIndex + 1
+  Next i
+  
+  ' Save and close the presentation
+  pptPres.SaveAs "C:\Users\sv49\Downloads\presentation.pptx"
+  pptPres.Close
+  
+  ' Quit PowerPoint application
+  ' pptApp.Quit
+  
+  ' Clean up
+  Set pptSlide = Nothing
+  Set pptPres = Nothing
+  Set pptApp = Nothing
+  Set ws = Nothing
+  Set xlApp = Nothing
+End Sub
