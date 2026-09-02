@@ -64,8 +64,9 @@ https://support.microsoft.com/en-us/word/use-mail-merge-for-bulk-email-letters-l
 **VBA**
 <br>
 https://learn.microsoft.com/en-us/office/vba/library-reference/concepts/getting-started-with-vba-in-office
-
 <br>
+<br>
+**Documentation:** https://learn.microsoft.com/en-us/office/vba/api/overview/language-reference
 
 __This might be something worth exploring:__
 
@@ -83,50 +84,75 @@ __This might be something worth exploring:__
     Dim pptPres As Object
     Dim pptSlide As Object
     
-    ' Create PowerPoint application
+    ' Use generic Object instead of Excel.Worksheet
+    Dim xlApp As Object
+    Dim xlWB As Object
+    Dim ws As Object
+    
+    Dim lastRow As Long
+    Dim i As Long
+    Dim slideIndex As Long
+    
+    ' Look for an already open instance of Excel
+    On Error Resume Next
+    Set xlApp = GetObject(, "Excel.Application")
+    On Error GoTo 0
+    
+    ' If Excel isn't open, alert user and exit
+    If xlApp Is Nothing Then
+        MsgBox "Please open your Excel file first!", vbCritical
+        Exit Sub
+    End If
+    
+    ' Reference the active worksheet in the open Excel window
+    Set ws = xlApp.ActiveSheet
+    
+    ' Find the last row with data in Column A
+    lastRow = ws.Cells(ws.Rows.Count, "A").End(-4162).Row ' -4162 is the raw value for xlUp
+    
+    ' Create PowerPoint application connection
     Set pptApp = CreateObject("PowerPoint.Application")
     pptApp.Visible = True
     
     ' Create a new presentation
     Set pptPres = pptApp.Presentations.Add
     
-    ' Add slides
-    Set pptSlide = pptPres.Slides.Add(1, 11) ' 11 represents the slide layout
+    slideIndex = 1
     
-    ' Slide 1
-    With pptSlide
-        .Shapes.Title.TextFrame.TextRange.Text = "Slide 1"
-        .Shapes(2).TextFrame.TextRange.Text = "Insert content here"
-    End With
-    
-    ' Slide 2
-    Set pptSlide = pptPres.Slides.Add(2, 11)
-    With pptSlide
-        .Shapes.Title.TextFrame.TextRange.Text = "Slide 2"
-        .Shapes(2).TextFrame.TextRange.Text = "Insert content here"
-    End With
-    
-    ' Slide 3
-    Set pptSlide = pptPres.Slides.Add(3, 11)
-    With pptSlide
-        .Shapes.Title.TextFrame.TextRange.Text = "Slide 3"
-        .Shapes(2).TextFrame.TextRange.Text = "Insert content here"
-    End With
-    
-    ' Continue adding slides as needed
+    ' Loop through rows starting from row 1 (change to 2 if you have headers)
+    For i = 1 To lastRow
+        ' Add a new slide (11 represents title/object layout)
+        Set pptSlide = pptPres.Slides.Add(slideIndex, 11)
+        
+        ' Populate slide text from Columns A and B
+        With pptSlide
+            If .Shapes.HasTitle Then
+                .Shapes.Title.TextFrame.TextRange.Text = CStr(ws.Cells(i, "A").Value)
+            End If
+            
+            If .Shapes.Count >= 2 Then
+                .Shapes(2).TextFrame.TextRange.Text = CStr(ws.Cells(i, "B").Value)
+            End If
+        End With
+        
+        slideIndex = slideIndex + 1
+    Next i
     
     ' Save and close the presentation
-    pptPres.SaveAs "C:\Path\to\save\presentation.pptx"
+    pptPres.SaveAs "C:\Users\sv49\Downloads\presentation.pptx"
     pptPres.Close
     
     ' Quit PowerPoint application
-    pptApp.Quit
+    ' pptApp.Quit
     
     ' Clean up
     Set pptSlide = Nothing
     Set pptPres = Nothing
     Set pptApp = Nothing
-  End Sub 
+    Set ws = Nothing
+    Set xlApp = Nothing
+  End Sub
+
 - Go back to the Excel sheet
 - Add text in Column A and Column B starting at row 2
 - Press ``alt + F8``
