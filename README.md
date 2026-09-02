@@ -1,6 +1,7 @@
 # ILC Workshop Report Automation
 
 ## Charlotte
+You will have to change the path of the final slideshow
 
 ```
  Sub CreateSlides()
@@ -21,7 +22,6 @@
      ' Slide 1
      With pptSlide
          .Shapes.Title.TextFrame.TextRange.Text = "Slide 1"
-     '    .Shapes(2).TextFrame.TextRange.Text = "Insert content here"
      
      End With
      
@@ -29,14 +29,12 @@
      Set pptSlide = pptPres.Slides.Add(2, 11)
      With pptSlide
          .Shapes.Title.TextFrame.TextRange.Text = "Slide 2"
-     '    .Shapes(2).TextFrame.TextRange.Text = "Insert content here"
      End With
      
      ' Slide 3
      Set pptSlide = pptPres.Slides.Add(3, 11)
      With pptSlide
          .Shapes.Title.TextFrame.TextRange.Text = "Slide 3"
-      '   .Shapes(2).TextFrame.TextRange.Text = "Insert content here"
      End With
      
      ' Continue adding slides as needed
@@ -53,6 +51,7 @@
      Set pptPres = Nothing
      Set pptApp = Nothing
  End Sub
+```
 
 ## Saloni
 
