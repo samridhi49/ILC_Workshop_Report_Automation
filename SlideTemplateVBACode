@@ -1,0 +1,67 @@
+Sub CreateSlideFromTemplateAndInsertDataLateBinding()
+    ' Change the types to generic "Object" so Excel doesn't need the library pre-loaded
+    Dim pptApp As Object
+    Dim pptPres As Object
+    Dim pptSlide As Object
+    Dim pptLayout As Object
+    Dim pptShape As Object
+    Dim ws As Worksheet
+    Dim templatePath As String
+    
+    ' Set up Excel Sheet Reference
+    Set ws = ThisWorkbook.Sheets("Sheet1") ' Change to your worksheet name
+    
+    ' Path to your PowerPoint template
+    templatePath = "C:\YourFolder\MyCustomTemplate.potx"
+    
+    ' Initialize PowerPoint instance safely using Late Binding
+    On Error Resume Next
+    Set pptApp = GetObject(, "PowerPoint.Application")
+    If pptApp Is Nothing Then
+        Set pptApp = CreateObject("PowerPoint.Application")
+    End If
+    On Error GoTo 0
+    
+    pptApp.Visible = True
+    
+    ' Open the presentation template
+    Set pptPres = pptApp.Presentations.Open(templatePath)
+    
+    ' Find your specific custom layout by its name
+    On Error Resume Next
+    Set pptLayout = pptPres.SlideMaster.CustomLayouts("My Custom XML Layout Name")
+    On Error GoTo 0
+    
+    ' Fallback to the first layout if the exact name isn't found
+    If pptLayout Is Nothing Then
+        Set pptLayout = pptPres.SlideMaster.CustomLayouts(1)
+    End If
+    
+    ' Create a new slide based on your custom layout
+    ' (Note: 1 stands for ppLayoutCustom in PowerPoint)
+    Set pptSlide = pptPres.Slides.AddSlide(pptPres.Slides.Count + 1, pptLayout)
+    
+    ' Loop through the shapes on the newly created slide and populate with Excel data
+    For Each pptShape In pptSlide.Shapes
+        ' 17 stands for msoPlaceholder, 1 stands for msoTextBox
+        If pptShape.HasTextFrame Then
+            
+            ' Match shape names (set in PowerPoint's Selection Pane) to Excel ranges
+            Select Case pptShape.Name
+                Case "Header_Box"
+                    pptShape.TextFrame.TextRange.Text = ws.Range("A1").Value
+                    
+                Case "Data_Box"
+                    pptShape.TextFrame.TextRange.Text = ws.Range("B2").Value
+            End Select
+            
+        End If
+    Next pptShape
+    
+    ' Clean up objects
+    Set pptSlide = Nothing
+    Set pptPres = Nothing
+    Set pptApp = Nothing
+    
+    MsgBox "Slide generated successfully!", vbInformation
+End Sub
