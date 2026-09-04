@@ -1,0 +1,88 @@
+' The issue seemed to be that the renamed components didn't reflect on excel so might have to look into that
+
+
+
+Sub CreateSlideFromTemplateAndInsertDataLateBinding()
+    Dim pptApp As Object
+    Dim pptPres As Object
+    Dim pptSlide As Object
+    Dim pptLayout As Object
+    Dim pptShape As Object
+    Dim ws As Worksheet
+    Dim templatePath As String
+    Dim d As Object
+    Dim lay As Object
+    Dim i As Long
+
+    Set ws = ThisWorkbook.Sheets("Calculations") ' Change to your worksheet name
+
+    templatePath = "Z:\Illinois Leadership Center\Student Staff\ART\Reports - Workshops\Automation\Renamed Template.potx"
+
+    On Error Resume Next
+    Set pptApp = GetObject(, "PowerPoint.Application")
+    If pptApp Is Nothing Then
+        Set pptApp = CreateObject("PowerPoint.Application")
+    End If
+    On Error GoTo 0
+
+    pptApp.Visible = True
+
+    Set pptPres = pptApp.Presentations.Open(templatePath)
+
+    For Each d In pptPres.Designs
+        For Each lay In d.SlideMaster.CustomLayouts
+            If Trim(lay.Name) = "Workshop Layout" Then
+                Set pptLayout = lay
+            End If
+        Next lay
+    Next d
+
+    If pptLayout Is Nothing Then
+        Set pptLayout = pptPres.Designs(1).SlideMaster.CustomLayouts(1)
+    End If
+
+    ' --- DIAGNOSTIC: print position/size + current text of every shape on the
+    ' layout, so you can match each INDEX to the box you see on screen in
+    ' PowerPoint (View > Slide Master > Workshop Layout). Positions are in points. ---
+    Debug.Print "---- Layout shapes: index | name | Left,Top,Width,Height | text ----"
+    For i = 1 To pptLayout.Shapes.Count
+        Dim txt As String
+        txt = ""
+        On Error Resume Next
+        If pptLayout.Shapes(i).HasTextFrame Then txt = pptLayout.Shapes(i).TextFrame.TextRange.Text
+        On Error GoTo 0
+        Debug.Print i & " | [" & pptLayout.Shapes(i).Name & "] | L=" & Round(pptLayout.Shapes(i).Left, 0) & _
+            " T=" & Round(pptLayout.Shapes(i).Top, 0) & " W=" & Round(pptLayout.Shapes(i).Width, 0) & _
+            " H=" & Round(pptLayout.Shapes(i).Height, 0) & " | text=""" & txt & """"
+    Next i
+    Debug.Print "---------------------------------------------------------------------"
+
+    Set pptSlide = pptPres.Slides.AddSlide(pptPres.Slides.Count + 1, pptLayout)
+
+    If pptSlide.Shapes.Count = 0 And pptLayout.Shapes.Count > 0 Then
+        For i = 1 To pptLayout.Shapes.Count
+            pptLayout.Shapes(i).Copy
+            pptSlide.Shapes.Paste
+        Next i
+    End If
+
+    ' --- EDIT THESE TWO INDEX NUMBERS once you've identified them from the
+    ' diagnostic output above (match by Left/Top/Width/Height/text to the
+    ' box you see in PowerPoint) ---
+    Const CONTENT_PERCENT_INDEX As Long = 4      ' <-- change to correct index
+    Const CONTENT_PERCENT_COMPARISON_INDEX As Long = 6  ' <-- change to correct index
+
+    If pptSlide.Shapes.Count >= CONTENT_PERCENT_INDEX Then
+        pptSlide.Shapes(CONTENT_PERCENT_INDEX).TextFrame.TextRange.Text = ws.Range("A2").Text
+    End If
+    If pptSlide.Shapes.Count >= CONTENT_PERCENT_COMPARISON_INDEX Then
+        pptSlide.Shapes(CONTENT_PERCENT_COMPARISON_INDEX).TextFrame.TextRange.Text = ws.Range("B2").Text
+    End If
+
+    Set pptSlide = Nothing
+    Set pptPres = Nothing
+    Set pptApp = Nothing
+
+    MsgBox "Slide generated successfully!", vbInformation
+End Sub
+
