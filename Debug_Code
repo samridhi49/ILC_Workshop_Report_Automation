@@ -16,7 +16,7 @@ Sub CreateSlideFromTemplateAndInsertDataLateBinding()
 
     Set ws = ThisWorkbook.Sheets("Calculations") ' Change to your worksheet name
 
-    templatePath = "Z:\Illinois Leadership Center\Student Staff\ART\Reports - Workshops\Automation\Renamed Template.potx"
+    templatePath = "Z:\Illinois Leadership Center\Student Staff\ART\Reports - Workshops\Automation\New Template September 9.potx"
 
     On Error Resume Next
     Set pptApp = GetObject(, "PowerPoint.Application")
@@ -85,4 +85,5 @@ Sub CreateSlideFromTemplateAndInsertDataLateBinding()
 
     MsgBox "Slide generated successfully!", vbInformation
 End Sub
+
 
