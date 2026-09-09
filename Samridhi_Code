@@ -1,6 +1,6 @@
 ' Select the workshop range (column E) starting at row 2 in the "Data" tab. Will create a slide for each unique workshop name.
 ' It fills in the workshop name, facilitator name, program date, and the three percentage boxes.
-' Need to add code for the graph and feedback box.
+' Need to add code for the graph, arrows, and feedback box.
 ' I guess attendees and response rate will have to be filled in manually?
 
 Sub CreateSlidesForSelectedWorkshops()
