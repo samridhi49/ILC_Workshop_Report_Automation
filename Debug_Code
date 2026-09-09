@@ -1,7 +1,3 @@
-' The issue seemed to be that the renamed components didn't reflect on excel so might have to look into that
-
-
-
 Sub CreateSlideFromTemplateAndInsertDataLateBinding()
     Dim pptApp As Object
     Dim pptPres As Object
@@ -66,17 +62,33 @@ Sub CreateSlideFromTemplateAndInsertDataLateBinding()
         Next i
     End If
 
-    ' --- EDIT THESE TWO INDEX NUMBERS once you've identified them from the
-    ' diagnostic output above (match by Left/Top/Width/Height/text to the
-    ' box you see in PowerPoint) ---
-    Const CONTENT_PERCENT_INDEX As Long = 4      ' <-- change to correct index
-    Const CONTENT_PERCENT_COMPARISON_INDEX As Long = 6  ' <-- change to correct index
+    ' --- DIAGNOSTIC: print the slide's actual shape names, so you can confirm
+    ' "Content Percent" / "Facilitator Percent" match exactly ---
+    Debug.Print "---- Slide shapes ----"
+    For i = 1 To pptSlide.Shapes.Count
+        Debug.Print i & " | [" & pptSlide.Shapes(i).Name & "]"
+    Next i
+    Debug.Print "-----------------------"
 
-    If pptSlide.Shapes.Count >= CONTENT_PERCENT_INDEX Then
-        pptSlide.Shapes(CONTENT_PERCENT_INDEX).TextFrame.TextRange.Text = ws.Range("A2").Text
+    ' --- Populate by shape name instead of index ---
+    Dim shpContent As Object
+    Dim shpFacilitator As Object
+
+    On Error Resume Next
+    Set shpContent = pptSlide.Shapes("Content Percent")
+    Set shpFacilitator = pptSlide.Shapes("Facilitator Percent")
+    On Error GoTo 0
+
+    If Not shpContent Is Nothing Then
+        shpContent.TextFrame.TextRange.Text = ws.Range("A2").Text
+    Else
+        Debug.Print "WARNING: Shape 'Content Percent' not found on slide."
     End If
-    If pptSlide.Shapes.Count >= CONTENT_PERCENT_COMPARISON_INDEX Then
-        pptSlide.Shapes(CONTENT_PERCENT_COMPARISON_INDEX).TextFrame.TextRange.Text = ws.Range("B2").Text
+
+    If Not shpFacilitator Is Nothing Then
+        shpFacilitator.TextFrame.TextRange.Text = ws.Range("B2").Text
+    Else
+        Debug.Print "WARNING: Shape 'Facilitator Percent' not found on slide."
     End If
 
     Set pptSlide = Nothing
@@ -85,5 +97,4 @@ Sub CreateSlideFromTemplateAndInsertDataLateBinding()
 
     MsgBox "Slide generated successfully!", vbInformation
 End Sub
-
 
