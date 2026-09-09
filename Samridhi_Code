@@ -16,7 +16,7 @@ Sub CreateSlidesForSelectedWorkshops()
     Dim uniqueNames As Collection
     Dim nameItem As Variant
 
-    Set dataWs = ThisWorkbook.Sheets("data")
+    Set dataWs = ThisWorkbook.Sheets("Data")
 
     templatePath = "Z:\Illinois Leadership Center\Student Staff\ART\Reports - Workshops\Automation\New Template September 9.potx"
 
