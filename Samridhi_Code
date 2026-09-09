@@ -1,4 +1,5 @@
 ' Select the workshop range (column E) starting at row 2 in the "Data" tab. Will create a slide for each unique workshop name.
+' But there might be a better way to group the workshops rather than unique names?
 ' It fills in the workshop name, facilitator name, program date, and the three percentage boxes.
 ' Need to add code for the graph, arrows, and feedback box.
 ' I guess attendees and response rate will have to be filled in manually?
@@ -77,7 +78,7 @@ Sub CreateSlidesForSelectedWorkshops()
     Set pptPres = Nothing
     Set pptApp = Nothing
 
-    MsgBox "Generated " & uniqueNames.Count & " slide(s) for unique workshops.", vbInformation
+    MsgBox "Generated " & uniqueNames.Count & " slide(s) for unique workshops :)", vbInformation
 End Sub
 
 Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs As Worksheet, workshopName As String)
