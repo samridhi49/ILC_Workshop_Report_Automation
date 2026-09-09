@@ -1,16 +1,16 @@
 ' Select the workshop range (column E) starting at row 2 in the "Data" tab. Will create a slide for each unique workshop name.
-
+' It fills in the workshop name, facilitator name, program date, and the three percentage boxes.
+' Need to add code for the graph and feedback box.
+' I guess attendees and response rate will have to be filled in manually?
 
 Sub CreateSlidesForSelectedWorkshops()
     Dim pptApp As Object
     Dim pptPres As Object
-    Dim pptSlide As Object
     Dim pptLayout As Object
     Dim dataWs As Worksheet
     Dim templatePath As String
     Dim d As Object
     Dim lay As Object
-    Dim i As Long
     Dim cell As Range
     Dim workshopName As String
     Dim uniqueNames As Collection
@@ -28,11 +28,11 @@ Sub CreateSlidesForSelectedWorkshops()
     ' --- Build a list of unique workshop names from the selection ---
     Set uniqueNames = New Collection
 
-    On Error Resume Next ' Collection.Add throws an error on duplicate keys - we use that to dedupe
+    On Error Resume Next
     For Each cell In Selection
         workshopName = Trim(cell.Value)
         If workshopName <> "" Then
-            uniqueNames.Add workshopName, CStr(workshopName) ' key = name, errors out silently if already added
+            uniqueNames.Add workshopName, CStr(workshopName)
         End If
     Next cell
     On Error GoTo 0
@@ -70,7 +70,6 @@ Sub CreateSlidesForSelectedWorkshops()
         Set pptLayout = pptPres.Designs(1).SlideMaster.CustomLayouts(1)
     End If
 
-    ' --- One slide per UNIQUE workshop name only ---
     For Each nameItem In uniqueNames
         GenerateWorkshopSlide pptPres, pptLayout, dataWs, CStr(nameItem)
     Next nameItem
@@ -97,13 +96,16 @@ Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs
     Dim shpFacilitator As Object
     Dim shpContent As Object
     Dim shpRecommended As Object
+    Dim shpInfo As Object
 
     On Error Resume Next
     Set shpFacilitator = pptSlide.Shapes("Facilitator Percent")
     Set shpContent = pptSlide.Shapes("Content Percent")
     Set shpRecommended = pptSlide.Shapes("Recommended Percent")
+    Set shpInfo = pptSlide.Shapes("Workshop Information")
     On Error GoTo 0
 
+    ' --- Percentages ---
     Dim facilitatorPct As Double
     Dim contentPct As Double
     Dim recommendedPct As Double
@@ -115,6 +117,17 @@ Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs
     UpdatePercentLine shpFacilitator, Format(facilitatorPct, "0%")
     UpdatePercentLine shpContent, Format(contentPct, "0%")
     UpdatePercentLine shpRecommended, Format(recommendedPct, "0%")
+
+    ' --- Workshop / Facilitator name / Date / Response count ---
+    Dim facilitatorName As String
+    Dim workshopDate As String
+    Dim responseCount As Long
+
+    facilitatorName = GetFirstMatchingValue(dataWs, workshopName, "G")  ' Column G = Q22 (Facilitator)
+    workshopDate = GetFirstMatchingValue(dataWs, workshopName, "F")     ' Column F = Program Date
+    responseCount = CountResponses(dataWs, workshopName)
+
+    UpdateWorkshopInfoBox shpInfo, workshopName, facilitatorName, workshopDate, responseCount
 
     Set pptSlide = Nothing
 End Sub
@@ -151,9 +164,52 @@ Function ComputeAgreePercent(dataWs As Worksheet, workshopName As String, colLet
     End If
 End Function
 
+' Returns the value from the given column on the FIRST row matching the workshop name.
+' Used here to pull the facilitator name (column G / Q22).
+Function GetFirstMatchingValue(dataWs As Worksheet, workshopName As String, colLetter As String) As String
+    Dim lastRow As Long
+    Dim r As Long
+    Dim val As String
+
+    lastRow = dataWs.Cells(dataWs.Rows.Count, "E").End(xlUp).Row
+
+    For r = 2 To lastRow
+        If Trim(dataWs.Cells(r, "E").Value) = workshopName Then
+            val = Trim(dataWs.Cells(r, colLetter).Value)
+            If val <> "" Then
+                GetFirstMatchingValue = val
+                Exit Function
+            End If
+        End If
+    Next r
+
+    GetFirstMatchingValue = ""
+End Function
+
+' Counts total rows (responses) matching the given workshop name.
+Function CountResponses(dataWs As Worksheet, workshopName As String) As Long
+    Dim lastRow As Long
+    Dim r As Long
+    Dim cnt As Long
+
+    lastRow = dataWs.Cells(dataWs.Rows.Count, "E").End(xlUp).Row
+    cnt = 0
+
+    For r = 2 To lastRow
+        If Trim(dataWs.Cells(r, "E").Value) = workshopName Then
+            cnt = cnt + 1
+        End If
+    Next r
+
+    CountResponses = cnt
+End Function
+
+' Replaces just the first line (the "98%" line) in a shape's text,
+' keeping the label sentence below it (e.g. "believed the content
+' was engaging.") completely intact.
 Private Sub UpdatePercentLine(shp As Object, newPercentText As String)
     If shp Is Nothing Then
-        Debug.Print "WARNING: shape not found, skipped."
+        Debug.Print "WARNING: percent shape not found, skipped."
         Exit Sub
     End If
 
@@ -174,3 +230,82 @@ Private Sub UpdatePercentLine(shp As Object, newPercentText As String)
 
     shp.TextFrame.TextRange.Text = Join(lines, lineBreak)
 End Sub
+
+' Detects which paragraph delimiter a PowerPoint TextRange actually uses.
+' PowerPoint text frames normally use vbCr (Chr 13) ALONE as the paragraph
+' break - not vbCrLf and not vbLf. Checking vbCr first fixes cases where
+' Split() was silently failing to break the text into separate lines.
+Private Function DetectLineBreak(fullText As String) As String
+    If InStr(fullText, vbCrLf) > 0 Then
+        DetectLineBreak = vbCrLf
+    ElseIf InStr(fullText, vbCr) > 0 Then
+        DetectLineBreak = vbCr
+    ElseIf InStr(fullText, vbLf) > 0 Then
+        DetectLineBreak = vbLf
+    Else
+        DetectLineBreak = vbCr ' fallback default
+    End If
+End Function
+
+' Fills in Workshop:, Facilitator:, Date:, and Responses: on the Workshop
+' Information box WITHOUT deleting any existing text. Each value is
+' inserted right after its label; everything else on the line
+' (other labels, spacing, punctuation) is left untouched.
+Private Sub UpdateWorkshopInfoBox(shp As Object, workshopName As String, facilitatorName As String, workshopDate As String, responseCount As Long)
+    If shp Is Nothing Then
+        Debug.Print "WARNING: Workshop Information shape not found, skipped."
+        Exit Sub
+    End If
+
+    Dim fullText As String
+    Dim lines() As String
+    Dim lineBreak As String
+    Dim i As Long
+
+    fullText = shp.TextFrame.TextRange.Text
+    lineBreak = DetectLineBreak(fullText)
+
+    lines = Split(fullText, lineBreak)
+
+    Debug.Print "---- Workshop Information box lines (delimiter=" & Asc(lineBreak) & ") ----"
+    For i = LBound(lines) To UBound(lines)
+        Debug.Print i & ": [" & lines(i) & "]"
+    Next i
+
+    For i = LBound(lines) To UBound(lines)
+        If InStr(lines(i), "Workshop:") > 0 And InStr(lines(i), workshopName) = 0 Then
+            lines(i) = InsertAfterLabel(lines(i), "Workshop:", workshopName)
+        End If
+
+        If InStr(lines(i), "Facilitator:") > 0 And InStr(lines(i), facilitatorName) = 0 Then
+            lines(i) = InsertAfterLabel(lines(i), "Facilitator:", facilitatorName)
+        End If
+
+        If InStr(lines(i), "Date:") > 0 And InStr(lines(i), workshopDate) = 0 Then
+            lines(i) = InsertAfterLabel(lines(i), "Date:", workshopDate)
+        End If
+
+        If InStr(lines(i), "Responses:") > 0 And InStr(lines(i), CStr(responseCount)) = 0 Then
+            lines(i) = InsertAfterLabel(lines(i), "Responses:", CStr(responseCount))
+        End If
+    Next i
+
+    shp.TextFrame.TextRange.Text = Join(lines, lineBreak)
+End Sub
+
+' Inserts newValue right after the label (e.g. "Workshop:"), keeping
+' everything else on the line untouched.
+Private Function InsertAfterLabel(lineText As String, label As String, newValue As String) As String
+    Dim pos As Long
+    pos = InStr(lineText, label)
+
+    If pos = 0 Then
+        InsertAfterLabel = lineText
+        Exit Function
+    End If
+
+    Dim insertPos As Long
+    insertPos = pos + Len(label)
+
+    InsertAfterLabel = Left(lineText, insertPos) & " " & newValue & Mid(lineText, insertPos + 1)
+End Function
