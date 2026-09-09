@@ -1,0 +1,176 @@
+' Select the workshop range (column E) starting at row 2 in the "Data" tab. Will create a slide for each unique workshop name.
+
+
+Sub CreateSlidesForSelectedWorkshops()
+    Dim pptApp As Object
+    Dim pptPres As Object
+    Dim pptSlide As Object
+    Dim pptLayout As Object
+    Dim dataWs As Worksheet
+    Dim templatePath As String
+    Dim d As Object
+    Dim lay As Object
+    Dim i As Long
+    Dim cell As Range
+    Dim workshopName As String
+    Dim uniqueNames As Collection
+    Dim nameItem As Variant
+
+    Set dataWs = ThisWorkbook.Sheets("data")
+
+    templatePath = "Z:\Illinois Leadership Center\Student Staff\ART\Reports - Workshops\Automation\New Template September 9.potx"
+
+    If TypeName(Selection) <> "Range" Then
+        MsgBox "Please select a range of cells containing workshop names first.", vbExclamation
+        Exit Sub
+    End If
+
+    ' --- Build a list of unique workshop names from the selection ---
+    Set uniqueNames = New Collection
+
+    On Error Resume Next ' Collection.Add throws an error on duplicate keys - we use that to dedupe
+    For Each cell In Selection
+        workshopName = Trim(cell.Value)
+        If workshopName <> "" Then
+            uniqueNames.Add workshopName, CStr(workshopName) ' key = name, errors out silently if already added
+        End If
+    Next cell
+    On Error GoTo 0
+
+    If uniqueNames.Count = 0 Then
+        MsgBox "No workshop names found in selection.", vbExclamation
+        Exit Sub
+    End If
+
+    Debug.Print "Unique workshops found: " & uniqueNames.Count
+    For Each nameItem In uniqueNames
+        Debug.Print " - " & nameItem
+    Next nameItem
+
+    On Error Resume Next
+    Set pptApp = GetObject(, "PowerPoint.Application")
+    If pptApp Is Nothing Then
+        Set pptApp = CreateObject("PowerPoint.Application")
+    End If
+    On Error GoTo 0
+
+    pptApp.Visible = True
+
+    Set pptPres = pptApp.Presentations.Open(templatePath)
+
+    For Each d In pptPres.Designs
+        For Each lay In d.SlideMaster.CustomLayouts
+            If Trim(lay.Name) = "Workshop Layout" Then
+                Set pptLayout = lay
+            End If
+        Next lay
+    Next d
+
+    If pptLayout Is Nothing Then
+        Set pptLayout = pptPres.Designs(1).SlideMaster.CustomLayouts(1)
+    End If
+
+    ' --- One slide per UNIQUE workshop name only ---
+    For Each nameItem In uniqueNames
+        GenerateWorkshopSlide pptPres, pptLayout, dataWs, CStr(nameItem)
+    Next nameItem
+
+    Set pptPres = Nothing
+    Set pptApp = Nothing
+
+    MsgBox "Generated " & uniqueNames.Count & " slide(s) for unique workshops.", vbInformation
+End Sub
+
+Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs As Worksheet, workshopName As String)
+    Dim pptSlide As Object
+    Dim i As Long
+
+    Set pptSlide = pptPres.Slides.AddSlide(pptPres.Slides.Count + 1, pptLayout)
+
+    If pptSlide.Shapes.Count = 0 And pptLayout.Shapes.Count > 0 Then
+        For i = 1 To pptLayout.Shapes.Count
+            pptLayout.Shapes(i).Copy
+            pptSlide.Shapes.Paste
+        Next i
+    End If
+
+    Dim shpFacilitator As Object
+    Dim shpContent As Object
+    Dim shpRecommended As Object
+
+    On Error Resume Next
+    Set shpFacilitator = pptSlide.Shapes("Facilitator Percent")
+    Set shpContent = pptSlide.Shapes("Content Percent")
+    Set shpRecommended = pptSlide.Shapes("Recommended Percent")
+    On Error GoTo 0
+
+    Dim facilitatorPct As Double
+    Dim contentPct As Double
+    Dim recommendedPct As Double
+
+    facilitatorPct = ComputeAgreePercent(dataWs, workshopName, "AR")
+    contentPct = ComputeAgreePercent(dataWs, workshopName, "AS")
+    recommendedPct = ComputeAgreePercent(dataWs, workshopName, "AT")
+
+    UpdatePercentLine shpFacilitator, Format(facilitatorPct, "0%")
+    UpdatePercentLine shpContent, Format(contentPct, "0%")
+    UpdatePercentLine shpRecommended, Format(recommendedPct, "0%")
+
+    Set pptSlide = Nothing
+End Sub
+
+Function ComputeAgreePercent(dataWs As Worksheet, workshopName As String, colLetter As String) As Double
+    Dim lastRow As Long
+    Dim r As Long
+    Dim agreeCount As Long
+    Dim totalCount As Long
+    Dim cellVal As String
+    Dim wsTypeVal As String
+
+    lastRow = dataWs.Cells(dataWs.Rows.Count, "E").End(xlUp).Row
+
+    agreeCount = 0
+    totalCount = 0
+
+    For r = 2 To lastRow
+        wsTypeVal = Trim(dataWs.Cells(r, "E").Value)
+        cellVal = Trim(dataWs.Cells(r, colLetter).Value)
+
+        If wsTypeVal = workshopName And cellVal <> "" Then
+            totalCount = totalCount + 1
+            If cellVal = "Strongly agree" Or cellVal = "Somewhat agree" Then
+                agreeCount = agreeCount + 1
+            End If
+        End If
+    Next r
+
+    If totalCount = 0 Then
+        ComputeAgreePercent = 0
+    Else
+        ComputeAgreePercent = agreeCount / totalCount
+    End If
+End Function
+
+Private Sub UpdatePercentLine(shp As Object, newPercentText As String)
+    If shp Is Nothing Then
+        Debug.Print "WARNING: shape not found, skipped."
+        Exit Sub
+    End If
+
+    Dim fullText As String
+    Dim lines() As String
+    Dim lineBreak As String
+
+    fullText = shp.TextFrame.TextRange.Text
+
+    If InStr(fullText, vbCrLf) > 0 Then
+        lineBreak = vbCrLf
+    Else
+        lineBreak = vbLf
+    End If
+
+    lines = Split(fullText, lineBreak)
+    lines(0) = newPercentText
+
+    shp.TextFrame.TextRange.Text = Join(lines, lineBreak)
+End Sub
