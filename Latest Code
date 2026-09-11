@@ -1,0 +1,436 @@
+Sub CreateSlidesForSelectedWorkshops()
+    Dim pptApp As Object
+    Dim pptPres As Object
+    Dim pptLayout As Object
+    Dim dataWs As Worksheet
+    Dim templatePath As String
+    Dim d As Object
+    Dim lay As Object
+    Dim cell As Range
+    Dim workshopName As String
+    Dim facilitatorName As String
+    Dim workshopDate As String
+    Dim uniqueWorkshops As Object   ' Scripting.Dictionary, late-bound
+    Dim comboKey As String
+    Dim info As Variant
+    Dim workshopRange As Range
+
+    Set dataWs = ThisWorkbook.Sheets("Data")
+
+    templatePath = "Z:\Illinois Leadership Center\Student Staff\ART\Reports - Workshops\Automation\New Template September 11.potx"
+
+    If TypeName(Selection) <> "Range" Then
+        MsgBox "Please select a range of cells containing workshop names first.", vbExclamation
+        Exit Sub
+    End If
+
+    ' --- Build a list of UNIQUE workshop INSTANCES from the selection ---
+    ' A workshop instance = Name + Facilitator + Date, since the same
+    ' workshop name can occur multiple times with different facilitators/dates.
+    Set uniqueWorkshops = CreateObject("Scripting.Dictionary")
+
+    For Each cell In Selection
+        workshopName = Trim(dataWs.Cells(cell.Row, "E").Value)
+        facilitatorName = Trim(dataWs.Cells(cell.Row, "G").Value)
+        workshopDate = Trim(dataWs.Cells(cell.Row, "F").Value)
+
+        If workshopName <> "" Then
+            comboKey = workshopName & "||" & facilitatorName & "||" & workshopDate
+            If Not uniqueWorkshops.Exists(comboKey) Then
+                uniqueWorkshops.Add comboKey, Array(workshopName, facilitatorName, workshopDate)
+            End If
+        End If
+    Next cell
+
+    If uniqueWorkshops.Count = 0 Then
+        MsgBox "No workshop names found in selection.", vbExclamation
+        Exit Sub
+    End If
+
+    Debug.Print "Unique workshop instances found: " & uniqueWorkshops.Count
+    For Each info In uniqueWorkshops.Items
+        Debug.Print " - " & info(0) & " | " & info(1) & " | " & info(2)
+    Next info
+
+    On Error Resume Next
+    Set pptApp = GetObject(, "PowerPoint.Application")
+    If pptApp Is Nothing Then
+        Set pptApp = CreateObject("PowerPoint.Application")
+    End If
+    On Error GoTo 0
+
+    pptApp.Visible = True
+
+    Set pptPres = pptApp.Presentations.Open(templatePath)
+
+    For Each d In pptPres.Designs
+        For Each lay In d.SlideMaster.CustomLayouts
+            If Trim(lay.Name) = "Workshop Layout" Then
+                Set pptLayout = lay
+            End If
+        Next lay
+    Next d
+
+    If pptLayout Is Nothing Then
+        Set pptLayout = pptPres.Designs(1).SlideMaster.CustomLayouts(1)
+    End If
+
+    For Each info In uniqueWorkshops.Items
+        workshopName = info(0)
+        facilitatorName = info(1)
+        workshopDate = info(2)
+
+        Set workshopRange = BuildWorkshopRange(dataWs, workshopName, facilitatorName, workshopDate)
+
+        GenerateWorkshopSlide pptPres, pptLayout, dataWs, workshopName, facilitatorName, workshopDate, workshopRange
+    Next info
+
+    Set pptPres = Nothing
+    Set pptApp = Nothing
+
+    MsgBox "Generated " & uniqueWorkshops.Count & " slide(s) for unique workshop instance(s) :)", vbInformation
+End Sub
+
+' Returns a Union range of every row in dataWs whose Name (E), Facilitator (G),
+' and Date (F) all match the given workshop instance. This range is what gets
+' passed downstream as "workshopRange" - GetAllValuesInRange uses it to pull
+' feedback text (col AU) only from rows belonging to THIS specific instance.
+Private Function BuildWorkshopRange(dataWs As Worksheet, workshopName As String, facilitatorName As String, workshopDate As String) As Range
+    Dim lastRow As Long
+    Dim r As Long
+    Dim result As Range
+
+    lastRow = dataWs.Cells(dataWs.Rows.Count, "E").End(xlUp).Row
+
+    For r = 2 To lastRow
+        If Trim(dataWs.Cells(r, "E").Value) = workshopName _
+           And Trim(dataWs.Cells(r, "G").Value) = facilitatorName _
+           And Trim(dataWs.Cells(r, "F").Value) = workshopDate Then
+
+            If result Is Nothing Then
+                Set result = dataWs.Cells(r, "E")
+            Else
+                Set result = Application.Union(result, dataWs.Cells(r, "E"))
+            End If
+        End If
+    Next r
+
+    Set BuildWorkshopRange = result
+End Function
+
+Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs As Worksheet, workshopName As String, facilitatorName As String, workshopDate As String, workshopRange As Range)
+    Dim pptSlide As Object
+    Dim i As Long
+
+    Set pptSlide = pptPres.Slides.AddSlide(pptPres.Slides.Count + 1, pptLayout)
+
+    If pptSlide.Shapes.Count = 0 And pptLayout.Shapes.Count > 0 Then
+        For i = 1 To pptLayout.Shapes.Count
+            pptLayout.Shapes(i).Copy
+            pptSlide.Shapes.Paste
+        Next i
+    End If
+
+    Dim shpFacilitator As Object
+    Dim shpContent As Object
+    Dim shpRecommended As Object
+    Dim shpInfo As Object
+    Dim shpFeedback As Object
+
+    On Error Resume Next
+    Set shpFacilitator = pptSlide.Shapes("Facilitator Percent")
+    Set shpContent = pptSlide.Shapes("Content Percent")
+    Set shpRecommended = pptSlide.Shapes("Recommended Percent")
+    Set shpInfo = pptSlide.Shapes("Workshop Information")
+    Set shpFeedback = pptSlide.Shapes("Feedback Textbox")
+    On Error GoTo 0
+
+    ' --- Percentages (scoped to THIS workshop instance only) ---
+    Dim facilitatorPct As Double
+    Dim contentPct As Double
+    Dim recommendedPct As Double
+
+    facilitatorPct = ComputeAgreePercent(dataWs, workshopName, facilitatorName, workshopDate, "AR")
+    contentPct = ComputeAgreePercent(dataWs, workshopName, facilitatorName, workshopDate, "AS")
+    recommendedPct = ComputeAgreePercent(dataWs, workshopName, facilitatorName, workshopDate, "AT")
+
+    UpdatePercentLine shpFacilitator, Format(facilitatorPct, "0%")
+    UpdatePercentLine shpContent, Format(contentPct, "0%")
+    UpdatePercentLine shpRecommended, Format(recommendedPct, "0%")
+
+    ' --- Response count: workshopRange is a Union of one cell per matching row,
+    ' so .Cells.Count IS the response count for this specific instance. ---
+    Dim responseCount As Long
+    responseCount = workshopRange.Cells.Count
+
+    ' --- Feedback text pulled from column AU, scoped to this instance's rows ---
+    Dim feedbackValues As Collection
+    Set feedbackValues = GetAllValuesInRange(workshopRange)
+
+    UpdateWorkshopInfoBox shpInfo, workshopName, facilitatorName, workshopDate, responseCount
+    UpdateFeedbackTextBox shpFeedback, feedbackValues
+
+    Set pptSlide = Nothing
+End Sub
+
+' Now scoped to a specific workshop INSTANCE (name + facilitator + date),
+' not just name, so stats aren't blended across two sessions with the same name.
+Function ComputeAgreePercent(dataWs As Worksheet, workshopName As String, facilitatorName As String, workshopDate As String, colLetter As String) As Double
+    Dim lastRow As Long
+    Dim r As Long
+    Dim agreeCount As Long
+    Dim totalCount As Long
+    Dim cellVal As String
+
+    lastRow = dataWs.Cells(dataWs.Rows.Count, "E").End(xlUp).Row
+
+    agreeCount = 0
+    totalCount = 0
+
+    For r = 2 To lastRow
+        If Trim(dataWs.Cells(r, "E").Value) = workshopName _
+           And Trim(dataWs.Cells(r, "G").Value) = facilitatorName _
+           And Trim(dataWs.Cells(r, "F").Value) = workshopDate Then
+
+            cellVal = Trim(dataWs.Cells(r, colLetter).Value)
+            If cellVal <> "" Then
+                totalCount = totalCount + 1
+                If cellVal = "Strongly agree" Or cellVal = "Somewhat agree" Then
+                    agreeCount = agreeCount + 1
+                End If
+            End If
+        End If
+    Next r
+
+    If totalCount = 0 Then
+        ComputeAgreePercent = 0
+    Else
+        ComputeAgreePercent = agreeCount / totalCount
+    End If
+End Function
+
+' Returns the value from the given column on the FIRST row matching the workshop name.
+' (Left as-is; no longer called from GenerateWorkshopSlide since facilitator/date
+' now come directly from the unique workshop-instance key, but kept in case it's
+' used elsewhere.)
+Function GetFirstMatchingValue(dataWs As Worksheet, workshopName As String, colLetter As String) As String
+    Dim lastRow As Long
+    Dim r As Long
+    Dim val As String
+
+    lastRow = dataWs.Cells(dataWs.Rows.Count, "E").End(xlUp).Row
+
+    For r = 2 To lastRow
+        If Trim(dataWs.Cells(r, "E").Value) = workshopName Then
+            val = Trim(dataWs.Cells(r, colLetter).Value)
+            If val <> "" Then
+                GetFirstMatchingValue = val
+                Exit Function
+            End If
+        End If
+    Next r
+
+    GetFirstMatchingValue = ""
+End Function
+
+' Replaces just the first line (the "98%" line) in a shape's text,
+' keeping the label sentence below it (e.g. "believed the content
+' was engaging.") completely intact. Percent line is set to 32pt,
+' all other lines are set to 14pt.
+Private Sub UpdatePercentLine(shp As Object, newPercentText As String)
+    If shp Is Nothing Then
+        Debug.Print "WARNING: percent shape not found, skipped."
+        Exit Sub
+    End If
+
+    Dim fullText As String
+    Dim lines() As String
+    Dim lineBreak As String
+    Dim paraCount As Long
+
+    fullText = shp.TextFrame.TextRange.Text
+    lineBreak = DetectLineBreak(fullText)
+
+    lines = Split(fullText, lineBreak)
+    lines(0) = newPercentText
+
+    shp.TextFrame.TextRange.Text = Join(lines, lineBreak)
+
+    ' --- Apply font sizes per paragraph ---
+    paraCount = shp.TextFrame.TextRange.Paragraphs.Count
+
+    shp.TextFrame.TextRange.Paragraphs(1).Font.Size = 32
+
+    If paraCount > 1 Then
+        shp.TextFrame.TextRange.Paragraphs(2, paraCount - 1).Font.Size = 14
+    End If
+End Sub
+
+' Detects which paragraph delimiter a PowerPoint TextRange actually uses.
+Private Function DetectLineBreak(fullText As String) As String
+    If InStr(fullText, vbCrLf) > 0 Then
+        DetectLineBreak = vbCrLf
+    ElseIf InStr(fullText, vbCr) > 0 Then
+        DetectLineBreak = vbCr
+    ElseIf InStr(fullText, vbLf) > 0 Then
+        DetectLineBreak = vbLf
+    Else
+        DetectLineBreak = vbCr ' fallback default
+    End If
+End Function
+
+Private Sub UpdateWorkshopInfoBox(shp As Object, workshopName As String, facilitatorName As String, workshopDate As String, responseCount As Long)
+    If shp Is Nothing Then
+        Debug.Print "WARNING: Workshop Information shape not found, skipped."
+        Exit Sub
+    End If
+
+    Dim fullText As String
+    Dim lines() As String
+    Dim lineBreak As String
+    Dim i As Long
+    Dim spacer As String
+
+    spacer = vbTab
+
+    fullText = shp.TextFrame.TextRange.Text
+    lineBreak = DetectLineBreak(fullText)
+
+    lines = Split(fullText, lineBreak)
+
+    Debug.Print "---- Workshop Information box lines (delimiter=" & Asc(lineBreak) & ") ----"
+    For i = LBound(lines) To UBound(lines)
+        Debug.Print i & ": [" & lines(i) & "]"
+    Next i
+
+    For i = LBound(lines) To UBound(lines)
+        If InStr(lines(i), "Workshop:") > 0 And InStr(lines(i), workshopName) = 0 Then
+            lines(i) = InsertAfterLabel(lines(i), "Workshop:", workshopName, spacer)
+        End If
+
+        If InStr(lines(i), "Facilitator:") > 0 And InStr(lines(i), facilitatorName) = 0 Then
+            lines(i) = InsertAfterLabel(lines(i), "Facilitator:", facilitatorName, spacer)
+        End If
+
+        If InStr(lines(i), "Date:") > 0 And InStr(lines(i), workshopDate) = 0 Then
+            lines(i) = InsertAfterLabel(lines(i), "Date:", workshopDate, spacer)
+        End If
+
+        If InStr(lines(i), "Responses:") > 0 And InStr(lines(i), CStr(responseCount)) = 0 Then
+            lines(i) = InsertAfterLabel(lines(i), "Responses:", CStr(responseCount))
+        End If
+    Next i
+
+    shp.TextFrame.TextRange.Text = Join(lines, lineBreak)
+
+    ' --- Bold the category labels only; leave all other text non-bold ---
+    Dim finalText As String
+    Dim labels() As Variant
+    Dim lbl As Variant
+    Dim searchPos As Long
+    Dim foundPos As Long
+
+    finalText = shp.TextFrame.TextRange.Text
+    shp.TextFrame.TextRange.Font.Bold = False
+
+    labels = Array("Group:", "Workshop:", "Facilitator:", "Date:", "Attendees:", "Responses:", "Response Rate:")
+
+    For Each lbl In labels
+        searchPos = 1
+        Do
+            foundPos = InStr(searchPos, finalText, CStr(lbl))
+            If foundPos = 0 Then Exit Do
+
+            shp.TextFrame.TextRange.Characters(foundPos, Len(CStr(lbl))).Font.Bold = True
+
+            searchPos = foundPos + Len(CStr(lbl))
+        Loop
+    Next lbl
+End Sub
+
+' Inserts newValue right after the label (e.g. "Workshop:"), keeping
+' everything else on the line untouched. separator controls what goes
+' between the label and the value (defaults to a single space).
+Private Function InsertAfterLabel(lineText As String, label As String, newValue As String, Optional separator As String = " ") As String
+    Dim pos As Long
+    pos = InStr(lineText, label)
+
+    If pos = 0 Then
+        InsertAfterLabel = lineText
+        Exit Function
+    End If
+
+    Dim insertPos As Long
+    insertPos = pos + Len(label)
+
+    InsertAfterLabel = Left(lineText, insertPos) & separator & newValue & Mid(lineText, insertPos + 1)
+End Function
+
+
+' Collects every non-empty value from column AU on the Data sheet, restricted
+' to whatever rows are present in dataRange. Handles BOTH a normal contiguous
+' range AND a non-contiguous Union range (e.g. from BuildWorkshopRange), since
+' it walks Areas/Rows rather than assuming a single contiguous block.
+Public Function GetAllValuesInRange(dataRange As Range) As Collection
+    Dim result As New Collection
+    Dim ws As Worksheet
+    Dim area As Range
+    Dim rw As Range
+    Dim auCell As Range
+
+    Set ws = dataRange.Worksheet
+
+    Debug.Print "---- Scanning " & dataRange.Address & " for non-empty AU values ----"
+
+    For Each area In dataRange.Areas
+        For Each rw In area.Rows
+            Set auCell = ws.Cells(rw.Row, "AU")
+            If Trim$(CStr(auCell.Value)) <> "" Then
+                result.Add auCell.Value
+                Debug.Print "Added: [" & auCell.Value & "] from " & auCell.Address
+            End If
+        Next rw
+    Next area
+
+    Debug.Print "Total non-empty values found: " & result.Count
+
+    Set GetAllValuesInRange = result
+End Function
+
+' Populates a textbox shape with the list of values gathered by
+' GetAllValuesInRange (or any Collection of values), as bullet points.
+Public Sub UpdateFeedbackTextBox(shp As Object, values As Collection)
+    If shp Is Nothing Then
+        Debug.Print "WARNING: Feedback shape not found, skipped."
+        Exit Sub
+    End If
+
+    Dim outputText As String
+    Dim item As Variant
+    Dim i As Long
+
+    If values Is Nothing Then
+        Debug.Print "WARNING: values Collection is Nothing, nothing to write."
+        shp.TextFrame.TextRange.Text = "No feedback available."
+        Exit Sub
+    End If
+
+    If values.Count = 0 Then
+        Debug.Print "No feedback values to display."
+        shp.TextFrame.TextRange.Text = "No feedback available."
+        Exit Sub
+    End If
+
+    i = 1
+    For Each item In values
+        outputText = outputText & CStr(item)
+        If i < values.Count Then
+            outputText = outputText & vbCrLf
+        End If
+        i = i + 1
+    Next item
+
+    Debug.Print "---- Writing " & values.Count & " feedback line(s) to shape ----"
+    shp.TextFrame.TextRange.Text = outputText
+End Sub
+
