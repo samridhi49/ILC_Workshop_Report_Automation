@@ -17,7 +17,7 @@ Sub CreateSlidesForSelectedWorkshops()
 
     Set dataWs = ThisWorkbook.Sheets("Data")
 
-    templatePath = "Z:\Illinois Leadership Center\Student Staff\ART\Reports - Workshops\Automation\New Template September 11.potx"
+    templatePath = "Z:\Illinois Leadership Center\Student Staff\ART\Reports - Workshops\Automation\New Template September 14.potx"
 
     If TypeName(Selection) <> "Range" Then
         MsgBox "Please select a range of cells containing workshop names first.", vbExclamation
@@ -131,6 +131,25 @@ Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs
         Next i
     End If
 
+    ' --- Diagnostic: list every shape now on the slide, with its Name AND
+    ' its ResultArrow tag (if any), so we can see exactly what's inherited
+    ' from the layout before any cleanup runs. ---
+    Debug.Print "---- Shapes on new slide before cleanup ----"
+    For i = 1 To pptSlide.Shapes.Count
+        Debug.Print i & ": Name=[" & pptSlide.Shapes(i).Name & "] Tag=[" & pptSlide.Shapes(i).Tags("ResultArrow") & "]"
+    Next i
+
+    ' --- Clear out any leftover RESULT arrows using their Tag, not their Name.
+    ' PowerPoint does not enforce unique shape names, so relying on Name alone
+    ' to find "the" Facilitator/Content/Recommended arrow is unreliable if a
+    ' stale shape with a matching name is lingering (e.g. inherited from the
+    ' layout, or left over from an earlier run). Tags are an explicit
+    ' key/value store on the shape that we set ourselves, so a match here is
+    ' unambiguous regardless of what the shape happens to be named. ---
+    RemoveAllShapesTagged pptSlide, "Facilitator Arrow"
+    RemoveAllShapesTagged pptSlide, "Content Arrow"
+    RemoveAllShapesTagged pptSlide, "Recommended Arrow"
+
     Dim shpFacilitator As Object
     Dim shpContent As Object
     Dim shpRecommended As Object
@@ -157,6 +176,19 @@ Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs
     UpdatePercentLine shpFacilitator, Format(facilitatorPct, "0%")
     UpdatePercentLine shpContent, Format(contentPct, "0%")
     UpdatePercentLine shpRecommended, Format(recommendedPct, "0%")
+
+    ' --- Comparison arrows (vs. workshop-type averages on Calculations sheet) ---
+    Dim calcWs As Worksheet
+    Dim facAvg As Double, contAvg As Double, recAvg As Double
+
+    Set calcWs = ThisWorkbook.Sheets("Calculations")
+    GetWorkshopAverages calcWs, workshopName, facAvg, contAvg, recAvg
+
+    UpdateComparisonArrows pptSlide, facilitatorPct, contentPct, recommendedPct, facAvg, contAvg, recAvg
+
+    ' --- Comparison textboxes (sentence version of the same Above/Below/Average
+    ' result used for the arrows, so text and arrows always agree) ---
+    UpdateComparisonTextBoxes pptSlide, facilitatorPct, contentPct, recommendedPct, facAvg, contAvg, recAvg
 
     ' --- Response count: workshopRange is a Union of one cell per matching row,
     ' so .Cells.Count IS the response count for this specific instance. ---
@@ -433,4 +465,280 @@ Public Sub UpdateFeedbackTextBox(shp As Object, values As Collection)
     Debug.Print "---- Writing " & values.Count & " feedback line(s) to shape ----"
     shp.TextFrame.TextRange.Text = outputText
 End Sub
+
+' Looks up the Facilitator/Program(Content)/Recommend averages for a workshop
+' NAME on the Calculations sheet, using a fixed name -> (Facilitator cell,
+' Content cell, Recommend cell) map, since each workshop block sits at a
+' hardcoded spot on that sheet rather than a computable offset.
+'
+' NOTE: every block below uses the SAME row for all three cells (e.g.
+' "Q10/R10/S10") EXCEPT "CliftonStrengths for Students: Self-Discovery",
+' which was given as Q4/R5/S6 - three different rows. That's kept exactly
+' as specified; flagging it here in case it was meant to be Q4/R4/S4 like
+' the rest.
+Private Sub GetWorkshopAverages(calcWs As Worksheet, workshopName As String, ByRef facAvg As Double, ByRef contAvg As Double, ByRef recAvg As Double)
+    Dim map As Object
+    Set map = CreateObject("Scripting.Dictionary")
+    map.CompareMode = vbTextCompare ' case-insensitive keys
+
+    map.Add "CliftonStrengths for Students: Self-Discovery", Array("Q4", "R5", "S6")
+    map.Add "Addressing Conflict in Teams", Array("Q10", "R10", "S10")
+    map.Add "Fostering a Culture of Feedback", Array("Q16", "R16", "S16")
+    map.Add "ILI: Illinois Leadership Inventory", Array("Q22", "R22", "S22")
+    map.Add "Sustainability and Leadership", Array("Q28", "R28", "S28")
+    map.Add "Leading with Empathy and Compassion", Array("Q34", "R34", "S34")
+    map.Add "Expressing Gratitude with Intention", Array("AB4", "AC4", "AD4")
+    map.Add "Telling My Leadership Story", Array("AB10", "AC10", "AD10")
+    map.Add "Entering Community Partnerships", Array("AB16", "AC16", "AD16")
+    map.Add "Navigating Multicultural Organizations", Array("AB22", "AC22", "AD22")
+    map.Add "Making Strategic Decisions", Array("AB28", "AC28", "AD28")
+
+    facAvg = 0: contAvg = 0: recAvg = 0
+
+    If Not map.Exists(workshopName) Then
+        Debug.Print "WARNING: no fixed cell mapping for workshop '" & workshopName & "' - averages default to 0."
+        Exit Sub
+    End If
+
+    Dim addrs As Variant
+    addrs = map(workshopName)
+
+    If Not IsError(calcWs.Range(addrs(0)).Value) Then facAvg = calcWs.Range(addrs(0)).Value
+    If Not IsError(calcWs.Range(addrs(1)).Value) Then contAvg = calcWs.Range(addrs(1)).Value
+    If Not IsError(calcWs.Range(addrs(2)).Value) Then recAvg = calcWs.Range(addrs(2)).Value
+
+    Debug.Print "Averages for '" & workshopName & "': Facilitator=" & facAvg & " Content=" & contAvg & " Recommend=" & recAvg
+End Sub
+
+' Duplicates the correct arrow (Above/Below/Average) into each of the 3 box
+' slots, then deletes the original 3 template arrows. Uses Shape.Duplicate
+' instead of Copy/Paste - Copy/Paste through the clipboard is unreliable when
+' called several times in quick succession (it can paste stale content).
+'
+' shpAbove/shpBelow/shpAvgArrow ("Above Arrow" / "Below Arrow" / "Average
+' Arrow") are the fixed DIRECTION/GRAPHIC templates every new result arrow
+' gets duplicated FROM - they say what the arrow looks like, not where it
+' goes.
+'
+' shpFacBox/shpContBox/shpRecBox ("Facilitator Arrow" / "Content Arrow" /
+' "Recommended Arrow") are empty rectangles that mark WHERE each arrow
+' belongs and how big a footprint it has - the placed arrow is centered
+' inside each rectangle's Left/Top/Width/Height. These boxes live in the
+' "Workshop Layout" custom layout and are never deleted, so every slide has
+' them in the same place.
+'
+' IMPORTANT NAME COLLISION NOTE: the box shapes are named "Facilitator
+' Arrow" / "Content Arrow" / "Recommended Arrow" - the SAME strings used as
+' the ResultArrow Tag value for the placed result arrows. That's fine for
+' Tag-based lookups (RemoveAllShapesTagged/PlaceArrow only ever search by
+' Tag, never by Name for the result arrows), but it means the placed result
+' arrow must NOT reuse that string as its own .Name, or a later
+' pptSlide.Shapes("Facilitator Arrow") lookup would become ambiguous
+' between the box and the result arrow. So PlaceArrow tags the new shape
+' "Facilitator Arrow" (matches RemoveAllShapesTagged) but names it
+' "Facilitator Result Arrow" instead.
+Private Sub UpdateComparisonArrows(pptSlide As Object, facilitatorPct As Double, contentPct As Double, recommendedPct As Double, facAvg As Double, contAvg As Double, recAvg As Double)
+    Dim shpAbove As Object, shpBelow As Object, shpAvgArrow As Object
+    Dim shpFacBox As Object, shpContBox As Object, shpRecBox As Object
+
+    On Error Resume Next
+    Set shpAbove = pptSlide.Shapes("Above Arrow")
+    Set shpBelow = pptSlide.Shapes("Below Arrow")
+    Set shpAvgArrow = pptSlide.Shapes("Average Arrow")
+
+    ' Empty rectangles marking where/how big each arrow should be.
+    Set shpFacBox = pptSlide.Shapes("Facilitator Arrow")
+    Set shpContBox = pptSlide.Shapes("Content Arrow")
+    Set shpRecBox = pptSlide.Shapes("Recommended Arrow")
+    On Error GoTo 0
+
+    If shpAbove Is Nothing Or shpBelow Is Nothing Or shpAvgArrow Is Nothing Then
+        Debug.Print "WARNING: arrow template shape(s) not found (Above=" & (shpAbove Is Nothing) & _
+                    " Below=" & (shpBelow Is Nothing) & " Average=" & (shpAvgArrow Is Nothing) & "), skipping arrow placement."
+        Exit Sub
+    End If
+
+    If shpFacBox Is Nothing Or shpContBox Is Nothing Or shpRecBox Is Nothing Then
+        Debug.Print "WARNING: arrow box shape(s) not found (Facilitator=" & (shpFacBox Is Nothing) & _
+                    " Content=" & (shpContBox Is Nothing) & " Recommended=" & (shpRecBox Is Nothing) & "), skipping arrow placement."
+        Exit Sub
+    End If
+
+    ' --- Safety-net cleanup: remove ANY preexisting RESULT arrows, identified
+    ' by Tag (the direction templates and the empty boxes are untouched here -
+    ' neither has a ResultArrow tag). ---
+    RemoveAllShapesTagged pptSlide, "Facilitator Arrow"
+    RemoveAllShapesTagged pptSlide, "Content Arrow"
+    RemoveAllShapesTagged pptSlide, "Recommended Arrow"
+
+    PlaceArrow shpAbove, shpBelow, shpAvgArrow, CompareToAverage(facilitatorPct, facAvg), shpFacBox, "Facilitator Arrow", "Facilitator Result Arrow"
+    PlaceArrow shpAbove, shpBelow, shpAvgArrow, CompareToAverage(contentPct, contAvg), shpContBox, "Content Arrow", "Content Result Arrow"
+    PlaceArrow shpAbove, shpBelow, shpAvgArrow, CompareToAverage(recommendedPct, recAvg), shpRecBox, "Recommended Arrow", "Recommended Result Arrow"
+
+    ' --- Now that the correct duplicates are placed and tagged, it's safe to
+    ' remove the original 3 direction/graphic templates. The empty boxes are
+    ' left in place - they stay on every slide as invisible position/size
+    ' markers for the next run. ---
+    shpAbove.Delete
+    shpBelow.Delete
+    shpAvgArrow.Delete
+End Sub
+
+' Sets the three "X Percent Comparison" textboxes. Uses a wider tolerance
+' than the arrows: anything within 4 percentage points of average (in
+' either direction) reads as "about average" in the text, even if the
+' arrow itself is showing a strict Above/Below result.
+Private Sub UpdateComparisonTextBoxes(pptSlide As Object, facilitatorPct As Double, contentPct As Double, recommendedPct As Double, facAvg As Double, contAvg As Double, recAvg As Double)
+    Dim shpFacText As Object, shpContText As Object, shpRecText As Object
+
+    Set shpFacText = FindShapeByName(pptSlide, "Facilitator Percent Comparison")
+    Set shpContText = FindShapeByName(pptSlide, "Content Percent Comparison")
+    Set shpRecText = FindShapeByName(pptSlide, "Recommend Percent Comparison")
+
+    SetComparisonText shpFacText, CompareToAverageForText(facilitatorPct, facAvg)
+    SetComparisonText shpContText, CompareToAverageForText(contentPct, contAvg)
+    SetComparisonText shpRecText, CompareToAverageForText(recommendedPct, recAvg)
+End Sub
+
+' Same idea as CompareToAverage (rounded whole percents), but with a
+' +/-4 percentage point tolerance band around average that reads as
+' "Average" - used only for the comparison SENTENCES, not the arrows.
+Private Function CompareToAverageForText(pct As Double, avg As Double) As String
+    Dim pctRounded As Long, avgRounded As Long
+    Dim diff As Long
+
+    pctRounded = CLng(Application.WorksheetFunction.Round(pct * 100, 0))
+    avgRounded = CLng(Application.WorksheetFunction.Round(avg * 100, 0))
+    diff = pctRounded - avgRounded
+
+    If Abs(diff) <= 4 Then
+        CompareToAverageForText = "Average"
+    ElseIf diff > 0 Then
+        CompareToAverageForText = "Above"
+    Else
+        CompareToAverageForText = "Below"
+    End If
+End Function
+
+' Case-insensitive, whitespace-tolerant shape lookup by name, with logging.
+' pptSlide.Shapes("exact name") is case-sensitive-ish and whitespace-strict
+' enough that a trailing space or different capitalization in the actual
+' shape name will silently fail to find it (especially under
+' On Error Resume Next). This walks every shape and compares trimmed,
+' lowercased names instead, and logs every shape name it sees so a
+' mismatch is visible in the Immediate window (Ctrl+G).
+Private Function FindShapeByName(pptSlide As Object, targetName As String) As Object
+    Dim i As Long
+    Dim shp As Object
+
+    For i = 1 To pptSlide.Shapes.Count
+        Set shp = pptSlide.Shapes(i)
+        If LCase(Trim(shp.Name)) = LCase(Trim(targetName)) Then
+            Set FindShapeByName = shp
+            Exit Function
+        End If
+    Next i
+
+    Debug.Print "WARNING: no shape found matching name '" & targetName & "'. Shapes on slide are:"
+    For i = 1 To pptSlide.Shapes.Count
+        Debug.Print "   [" & pptSlide.Shapes(i).Name & "]"
+    Next i
+
+    Set FindShapeByName = Nothing
+End Function
+' Writes the "For this type of workshop, this is ___ average." sentence
+' into shp, with the blank filled in from resultType ("Above"/"Below"/"Average" -
+' the same three values CompareToAverage returns for the arrows).
+Private Sub SetComparisonText(shp As Object, resultType As String)
+    If shp Is Nothing Then
+        Debug.Print "WARNING: comparison text shape not found, skipped."
+        Exit Sub
+    End If
+
+    If Not shp.HasTextFrame Then
+        Debug.Print "WARNING: shape '" & shp.Name & "' has no text frame, skipped."
+        Exit Sub
+    End If
+
+    Dim comparisonWord As String
+    Select Case resultType
+        Case "Above": comparisonWord = "above"
+        Case "Below": comparisonWord = "below"
+        Case Else: comparisonWord = "about"
+    End Select
+
+    shp.TextFrame.TextRange.Text = "For this type of workshop, this is " & comparisonWord & " average."
+    Debug.Print "Set '" & shp.Name & "' text to: " & shp.TextFrame.TextRange.Text
+End Sub
+
+' Deletes EVERY shape on pptSlide whose ResultArrow tag matches tagValue.
+' Tags are used instead of Name because PowerPoint does not enforce unique
+' shape names - a stale shape could share a name with a shape we intend to
+' keep, or a rename could silently not "stick" in edge cases. Tags.Item
+' returns "" (not an error) when the tag isn't set, so no error handling
+' is needed around the lookup itself.
+Private Sub RemoveAllShapesTagged(pptSlide As Object, tagValue As String)
+    Dim i As Long
+    Dim removedCount As Long
+    removedCount = 0
+
+    For i = pptSlide.Shapes.Count To 1 Step -1
+        If pptSlide.Shapes(i).Tags("ResultArrow") = tagValue Then
+            Debug.Print "Removing tagged shape: Name=[" & pptSlide.Shapes(i).Name & "] Tag=[" & tagValue & "]"
+            pptSlide.Shapes(i).Delete
+            removedCount = removedCount + 1
+        End If
+    Next i
+
+    If removedCount > 0 Then
+        Debug.Print "Removed " & removedCount & " shape(s) tagged: " & tagValue
+    Else
+        Debug.Print "No shapes found tagged: " & tagValue
+    End If
+End Sub
+
+' Duplicates whichever master arrow matches resultType and centers the copy
+' inside boxShape (using the box's own Left/Top/Width/Height, so the arrow's
+' size relative to the box doesn't matter - it always ends up centered).
+' Tags the new shape with "ResultArrow" = tagValue so it can be found and
+' removed reliably later (see RemoveAllShapesTagged), and names it
+' shapeName - kept deliberately DIFFERENT from boxShape's own name so a
+' later Shapes("Facilitator Arrow")-style lookup of the box stays
+' unambiguous (see the name-collision note above UpdateComparisonArrows).
+Private Sub PlaceArrow(shpAbove As Object, shpBelow As Object, shpAvgArrow As Object, resultType As String, boxShape As Object, tagValue As String, shapeName As String)
+    Dim masterShp As Object
+    Dim newShp As Object
+
+    Select Case resultType
+        Case "Above": Set masterShp = shpAbove
+        Case "Below": Set masterShp = shpBelow
+        Case Else: Set masterShp = shpAvgArrow
+    End Select
+
+    Set newShp = masterShp.Duplicate.item(1)
+
+    ' Center the arrow inside the box's bounds rather than snapping to its
+    ' top-left corner.
+    newShp.Left = boxShape.Left + (boxShape.Width - newShp.Width) / 2
+    newShp.Top = boxShape.Top + (boxShape.Height - newShp.Height) / 2
+
+    newShp.Name = shapeName
+    newShp.Tags.Add "ResultArrow", tagValue
+End Sub
+
+' "Above"/"Below"/"Average", comparing rounded whole percents (matches the 0% display format).
+Private Function CompareToAverage(pct As Double, avg As Double) As String
+    Dim pctRounded As Long, avgRounded As Long
+    pctRounded = CLng(Application.WorksheetFunction.Round(pct * 100, 0))
+    avgRounded = CLng(Application.WorksheetFunction.Round(avg * 100, 0))
+
+    If pctRounded > avgRounded Then
+        CompareToAverage = "Above"
+    ElseIf pctRounded < avgRounded Then
+        CompareToAverage = "Below"
+    Else
+        CompareToAverage = "Average"
+    End If
+End Function
+
 
