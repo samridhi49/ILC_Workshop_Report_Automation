@@ -591,9 +591,9 @@ End Sub
 Private Sub UpdateComparisonTextBoxes(pptSlide As Object, facilitatorPct As Double, contentPct As Double, recommendedPct As Double, facAvg As Double, contAvg As Double, recAvg As Double)
     Dim shpFacText As Object, shpContText As Object, shpRecText As Object
 
-    Set shpFacText = FindShapeByName(pptSlide, "Facilitator Percent Comparison")
-    Set shpContText = FindShapeByName(pptSlide, "Content Percent Comparison")
-    Set shpRecText = FindShapeByName(pptSlide, "Recommend Percent Comparison")
+    Set shpFacText = FindShapeByName(pptSlide, "Facilitator Comparison")
+    Set shpContText = FindShapeByName(pptSlide, "Content Comparison")
+    Set shpRecText = FindShapeByName(pptSlide, "Recommended Comparison")
 
     SetComparisonText shpFacText, CompareToAverageForText(facilitatorPct, facAvg)
     SetComparisonText shpContText, CompareToAverageForText(contentPct, contAvg)
@@ -740,5 +740,4 @@ Private Function CompareToAverage(pct As Double, avg As Double) As String
         CompareToAverage = "Average"
     End If
 End Function
-
 
