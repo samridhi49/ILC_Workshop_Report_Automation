@@ -1,9 +1,3 @@
-' Select the workshop range (column E) starting at row 2 in the "Data" tab. Will create a slide for each unique workshop name.
-' But there might be a better way to group the workshops rather than unique names?
-' It fills in the workshop name, facilitator name, program date, and the three percentage boxes.
-' Need to add code for the graph, arrows, and feedback box.
-' I guess attendees and response rate will have to be filled in manually?
-
 Sub CreateSlidesForSelectedWorkshops()
     Dim pptApp As Object
     Dim pptPres As Object
@@ -14,39 +8,49 @@ Sub CreateSlidesForSelectedWorkshops()
     Dim lay As Object
     Dim cell As Range
     Dim workshopName As String
-    Dim uniqueNames As Collection
-    Dim nameItem As Variant
+    Dim facilitatorName As String
+    Dim workshopDate As String
+    Dim uniqueWorkshops As Object   ' Scripting.Dictionary, late-bound
+    Dim comboKey As String
+    Dim info As Variant
+    Dim workshopRange As Range
 
     Set dataWs = ThisWorkbook.Sheets("Data")
 
-    templatePath = "Z:\Illinois Leadership Center\Student Staff\ART\Reports - Workshops\Automation\New Template September 9.potx"
+    templatePath = "Z:\Illinois Leadership Center\Student Staff\ART\Reports - Workshops\Automation\New Template September 14.potx"
 
     If TypeName(Selection) <> "Range" Then
         MsgBox "Please select a range of cells containing workshop names first.", vbExclamation
         Exit Sub
     End If
 
-    ' --- Build a list of unique workshop names from the selection ---
-    Set uniqueNames = New Collection
+    ' --- Build a list of UNIQUE workshop INSTANCES from the selection ---
+    ' A workshop instance = Name + Facilitator + Date, since the same
+    ' workshop name can occur multiple times with different facilitators/dates.
+    Set uniqueWorkshops = CreateObject("Scripting.Dictionary")
 
-    On Error Resume Next
     For Each cell In Selection
-        workshopName = Trim(cell.Value)
+        workshopName = Trim(dataWs.Cells(cell.Row, "E").Value)
+        facilitatorName = Trim(dataWs.Cells(cell.Row, "G").Value)
+        workshopDate = Trim(dataWs.Cells(cell.Row, "F").Value)
+
         If workshopName <> "" Then
-            uniqueNames.Add workshopName, CStr(workshopName)
+            comboKey = workshopName & "||" & facilitatorName & "||" & workshopDate
+            If Not uniqueWorkshops.Exists(comboKey) Then
+                uniqueWorkshops.Add comboKey, Array(workshopName, facilitatorName, workshopDate)
+            End If
         End If
     Next cell
-    On Error GoTo 0
 
-    If uniqueNames.Count = 0 Then
+    If uniqueWorkshops.Count = 0 Then
         MsgBox "No workshop names found in selection.", vbExclamation
         Exit Sub
     End If
 
-    Debug.Print "Unique workshops found: " & uniqueNames.Count
-    For Each nameItem In uniqueNames
-        Debug.Print " - " & nameItem
-    Next nameItem
+    Debug.Print "Unique workshop instances found: " & uniqueWorkshops.Count
+    For Each info In uniqueWorkshops.Items
+        Debug.Print " - " & info(0) & " | " & info(1) & " | " & info(2)
+    Next info
 
     On Error Resume Next
     Set pptApp = GetObject(, "PowerPoint.Application")
@@ -71,17 +75,50 @@ Sub CreateSlidesForSelectedWorkshops()
         Set pptLayout = pptPres.Designs(1).SlideMaster.CustomLayouts(1)
     End If
 
-    For Each nameItem In uniqueNames
-        GenerateWorkshopSlide pptPres, pptLayout, dataWs, CStr(nameItem)
-    Next nameItem
+    For Each info In uniqueWorkshops.Items
+        workshopName = info(0)
+        facilitatorName = info(1)
+        workshopDate = info(2)
+
+        Set workshopRange = BuildWorkshopRange(dataWs, workshopName, facilitatorName, workshopDate)
+
+        GenerateWorkshopSlide pptPres, pptLayout, dataWs, workshopName, facilitatorName, workshopDate, workshopRange
+    Next info
 
     Set pptPres = Nothing
     Set pptApp = Nothing
 
-    MsgBox "Generated " & uniqueNames.Count & " slide(s) for unique workshops :)", vbInformation
+    MsgBox "Generated " & uniqueWorkshops.Count & " slide(s) for unique workshop instance(s) :)", vbInformation
 End Sub
 
-Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs As Worksheet, workshopName As String)
+' Returns a Union range of every row in dataWs whose Name (E), Facilitator (G),
+' and Date (F) all match the given workshop instance. This range is what gets
+' passed downstream as "workshopRange" - GetAllValuesInRange uses it to pull
+' feedback text (col AU) only from rows belonging to THIS specific instance.
+Private Function BuildWorkshopRange(dataWs As Worksheet, workshopName As String, facilitatorName As String, workshopDate As String) As Range
+    Dim lastRow As Long
+    Dim r As Long
+    Dim result As Range
+
+    lastRow = dataWs.Cells(dataWs.Rows.Count, "E").End(xlUp).Row
+
+    For r = 2 To lastRow
+        If Trim(dataWs.Cells(r, "E").Value) = workshopName _
+           And Trim(dataWs.Cells(r, "G").Value) = facilitatorName _
+           And Trim(dataWs.Cells(r, "F").Value) = workshopDate Then
+
+            If result Is Nothing Then
+                Set result = dataWs.Cells(r, "E")
+            Else
+                Set result = Application.Union(result, dataWs.Cells(r, "E"))
+            End If
+        End If
+    Next r
+
+    Set BuildWorkshopRange = result
+End Function
+
+Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs As Worksheet, workshopName As String, facilitatorName As String, workshopDate As String, workshopRange As Range)
     Dim pptSlide As Object
     Dim i As Long
 
@@ -94,52 +131,84 @@ Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs
         Next i
     End If
 
+    ' --- Diagnostic: list every shape now on the slide, with its Name AND
+    ' its ResultArrow tag (if any), so we can see exactly what's inherited
+    ' from the layout before any cleanup runs. ---
+    Debug.Print "---- Shapes on new slide before cleanup ----"
+    For i = 1 To pptSlide.Shapes.Count
+        Debug.Print i & ": Name=[" & pptSlide.Shapes(i).Name & "] Tag=[" & pptSlide.Shapes(i).Tags("ResultArrow") & "]"
+    Next i
+
+    ' --- Clear out any leftover RESULT arrows using their Tag, not their Name.
+    ' PowerPoint does not enforce unique shape names, so relying on Name alone
+    ' to find "the" Facilitator/Content/Recommended arrow is unreliable if a
+    ' stale shape with a matching name is lingering (e.g. inherited from the
+    ' layout, or left over from an earlier run). Tags are an explicit
+    ' key/value store on the shape that we set ourselves, so a match here is
+    ' unambiguous regardless of what the shape happens to be named. ---
+    RemoveAllShapesTagged pptSlide, "Facilitator Arrow"
+    RemoveAllShapesTagged pptSlide, "Content Arrow"
+    RemoveAllShapesTagged pptSlide, "Recommended Arrow"
+
     Dim shpFacilitator As Object
     Dim shpContent As Object
     Dim shpRecommended As Object
     Dim shpInfo As Object
+    Dim shpFeedback As Object
 
     On Error Resume Next
     Set shpFacilitator = pptSlide.Shapes("Facilitator Percent")
     Set shpContent = pptSlide.Shapes("Content Percent")
     Set shpRecommended = pptSlide.Shapes("Recommended Percent")
     Set shpInfo = pptSlide.Shapes("Workshop Information")
+    Set shpFeedback = pptSlide.Shapes("Feedback Textbox")
     On Error GoTo 0
 
-    ' --- Percentages ---
+    ' --- Percentages (scoped to THIS workshop instance only) ---
     Dim facilitatorPct As Double
     Dim contentPct As Double
     Dim recommendedPct As Double
 
-    facilitatorPct = ComputeAgreePercent(dataWs, workshopName, "AR")
-    contentPct = ComputeAgreePercent(dataWs, workshopName, "AS")
-    recommendedPct = ComputeAgreePercent(dataWs, workshopName, "AT")
+    facilitatorPct = ComputeAgreePercent(dataWs, workshopName, facilitatorName, workshopDate, "AR")
+    contentPct = ComputeAgreePercent(dataWs, workshopName, facilitatorName, workshopDate, "AS")
+    recommendedPct = ComputeAgreePercent(dataWs, workshopName, facilitatorName, workshopDate, "AT")
 
     UpdatePercentLine shpFacilitator, Format(facilitatorPct, "0%")
     UpdatePercentLine shpContent, Format(contentPct, "0%")
     UpdatePercentLine shpRecommended, Format(recommendedPct, "0%")
 
-    ' --- Workshop / Facilitator name / Date / Response count ---
-    Dim facilitatorName As String
-    Dim workshopDate As String
-    Dim responseCount As Long
+    ' --- Comparison arrows (vs. workshop-type averages on Calculations sheet) ---
+    Dim calcWs As Worksheet
+    Dim facAvg As Double, contAvg As Double, recAvg As Double
 
-    facilitatorName = GetFirstMatchingValue(dataWs, workshopName, "G")  ' Column G = Q22 (Facilitator)
-    workshopDate = GetFirstMatchingValue(dataWs, workshopName, "F")     ' Column F = Program Date
-    responseCount = CountResponses(dataWs, workshopName)
+    Set calcWs = ThisWorkbook.Sheets("Calculations")
+    GetWorkshopAverages calcWs, workshopName, facAvg, contAvg, recAvg
+
+    UpdateComparisonArrows pptSlide, facilitatorPct, contentPct, recommendedPct, facAvg, contAvg, recAvg
+
+    ' --- Response count: workshopRange is a Union of one cell per matching row,
+    ' so .Cells.Count IS the response count for this specific instance. ---
+    Dim responseCount As Long
+    responseCount = workshopRange.Cells.Count
+
+    ' --- Feedback text pulled from column AU, scoped to this instance's rows ---
+    Dim feedbackValues As Collection
+    Set feedbackValues = GetAllValuesInRange(workshopRange)
 
     UpdateWorkshopInfoBox shpInfo, workshopName, facilitatorName, workshopDate, responseCount
+    UpdateFeedbackTextBox shpFeedback, feedbackValues
 
     Set pptSlide = Nothing
 End Sub
 
-Function ComputeAgreePercent(dataWs As Worksheet, workshopName As String, colLetter As String) As Double
+' Now scoped to a specific workshop INSTANCE (name + facilitator + date),
+' not just name, so stats aren't blended across two sessions with the same name.
+Function ComputeAgreePercent(dataWs As Worksheet, workshopName As String, facilitatorName As String, workshopDate As String, colLetter As String) As Double
     Dim lastRow As Long
     Dim r As Long
     Dim agreeCount As Long
     Dim totalCount As Long
     Dim cellVal As String
-    Dim wsTypeVal As String
 
     lastRow = dataWs.Cells(dataWs.Rows.Count, "E").End(xlUp).Row
 
@@ -147,13 +216,16 @@ Function ComputeAgreePercent(dataWs As Worksheet, workshopName As String, colLet
     totalCount = 0
 
     For r = 2 To lastRow
-        wsTypeVal = Trim(dataWs.Cells(r, "E").Value)
-        cellVal = Trim(dataWs.Cells(r, colLetter).Value)
+        If Trim(dataWs.Cells(r, "E").Value) = workshopName _
+           And Trim(dataWs.Cells(r, "G").Value) = facilitatorName _
+           And Trim(dataWs.Cells(r, "F").Value) = workshopDate Then
 
-        If wsTypeVal = workshopName And cellVal <> "" Then
-            totalCount = totalCount + 1
-            If cellVal = "Strongly agree" Or cellVal = "Somewhat agree" Then
-                agreeCount = agreeCount + 1
+            cellVal = Trim(dataWs.Cells(r, colLetter).Value)
+            If cellVal <> "" Then
+                totalCount = totalCount + 1
+                If cellVal = "Strongly agree" Or cellVal = "Somewhat agree" Then
+                    agreeCount = agreeCount + 1
+                End If
             End If
         End If
     Next r
@@ -166,7 +238,9 @@ Function ComputeAgreePercent(dataWs As Worksheet, workshopName As String, colLet
 End Function
 
 ' Returns the value from the given column on the FIRST row matching the workshop name.
-' Used here to pull the facilitator name (column G / Q22).
+' (Left as-is; no longer called from GenerateWorkshopSlide since facilitator/date
+' now come directly from the unique workshop-instance key, but kept in case it's
+' used elsewhere.)
 Function GetFirstMatchingValue(dataWs As Worksheet, workshopName As String, colLetter As String) As String
     Dim lastRow As Long
     Dim r As Long
@@ -187,27 +261,10 @@ Function GetFirstMatchingValue(dataWs As Worksheet, workshopName As String, colL
     GetFirstMatchingValue = ""
 End Function
 
-' Counts total rows (responses) matching the given workshop name.
-Function CountResponses(dataWs As Worksheet, workshopName As String) As Long
-    Dim lastRow As Long
-    Dim r As Long
-    Dim cnt As Long
-
-    lastRow = dataWs.Cells(dataWs.Rows.Count, "E").End(xlUp).Row
-    cnt = 0
-
-    For r = 2 To lastRow
-        If Trim(dataWs.Cells(r, "E").Value) = workshopName Then
-            cnt = cnt + 1
-        End If
-    Next r
-
-    CountResponses = cnt
-End Function
-
 ' Replaces just the first line (the "98%" line) in a shape's text,
 ' keeping the label sentence below it (e.g. "believed the content
-' was engaging.") completely intact.
+' was engaging.") completely intact. Percent line is set to 32pt,
+' all other lines are set to 14pt.
 Private Sub UpdatePercentLine(shp As Object, newPercentText As String)
     If shp Is Nothing Then
         Debug.Print "WARNING: percent shape not found, skipped."
@@ -217,25 +274,27 @@ Private Sub UpdatePercentLine(shp As Object, newPercentText As String)
     Dim fullText As String
     Dim lines() As String
     Dim lineBreak As String
+    Dim paraCount As Long
 
     fullText = shp.TextFrame.TextRange.Text
-
-    If InStr(fullText, vbCrLf) > 0 Then
-        lineBreak = vbCrLf
-    Else
-        lineBreak = vbLf
-    End If
+    lineBreak = DetectLineBreak(fullText)
 
     lines = Split(fullText, lineBreak)
     lines(0) = newPercentText
 
     shp.TextFrame.TextRange.Text = Join(lines, lineBreak)
+
+    ' --- Apply font sizes per paragraph ---
+    paraCount = shp.TextFrame.TextRange.Paragraphs.Count
+
+    shp.TextFrame.TextRange.Paragraphs(1).Font.Size = 32
+
+    If paraCount > 1 Then
+        shp.TextFrame.TextRange.Paragraphs(2, paraCount - 1).Font.Size = 14
+    End If
 End Sub
 
 ' Detects which paragraph delimiter a PowerPoint TextRange actually uses.
-' PowerPoint text frames normally use vbCr (Chr 13) ALONE as the paragraph
-' break - not vbCrLf and not vbLf. Checking vbCr first fixes cases where
-' Split() was silently failing to break the text into separate lines.
 Private Function DetectLineBreak(fullText As String) As String
     If InStr(fullText, vbCrLf) > 0 Then
         DetectLineBreak = vbCrLf
@@ -248,10 +307,6 @@ Private Function DetectLineBreak(fullText As String) As String
     End If
 End Function
 
-' Fills in Workshop:, Facilitator:, Date:, and Responses: on the Workshop
-' Information box WITHOUT deleting any existing text. Each value is
-' inserted right after its label; everything else on the line
-' (other labels, spacing, punctuation) is left untouched.
 Private Sub UpdateWorkshopInfoBox(shp As Object, workshopName As String, facilitatorName As String, workshopDate As String, responseCount As Long)
     If shp Is Nothing Then
         Debug.Print "WARNING: Workshop Information shape not found, skipped."
@@ -262,6 +317,9 @@ Private Sub UpdateWorkshopInfoBox(shp As Object, workshopName As String, facilit
     Dim lines() As String
     Dim lineBreak As String
     Dim i As Long
+    Dim spacer As String
+
+    spacer = vbTab
 
     fullText = shp.TextFrame.TextRange.Text
     lineBreak = DetectLineBreak(fullText)
@@ -275,15 +333,15 @@ Private Sub UpdateWorkshopInfoBox(shp As Object, workshopName As String, facilit
 
     For i = LBound(lines) To UBound(lines)
         If InStr(lines(i), "Workshop:") > 0 And InStr(lines(i), workshopName) = 0 Then
-            lines(i) = InsertAfterLabel(lines(i), "Workshop:", workshopName)
+            lines(i) = InsertAfterLabel(lines(i), "Workshop:", workshopName, spacer)
         End If
 
         If InStr(lines(i), "Facilitator:") > 0 And InStr(lines(i), facilitatorName) = 0 Then
-            lines(i) = InsertAfterLabel(lines(i), "Facilitator:", facilitatorName)
+            lines(i) = InsertAfterLabel(lines(i), "Facilitator:", facilitatorName, spacer)
         End If
 
         If InStr(lines(i), "Date:") > 0 And InStr(lines(i), workshopDate) = 0 Then
-            lines(i) = InsertAfterLabel(lines(i), "Date:", workshopDate)
+            lines(i) = InsertAfterLabel(lines(i), "Date:", workshopDate, spacer)
         End If
 
         If InStr(lines(i), "Responses:") > 0 And InStr(lines(i), CStr(responseCount)) = 0 Then
@@ -292,11 +350,36 @@ Private Sub UpdateWorkshopInfoBox(shp As Object, workshopName As String, facilit
     Next i
 
     shp.TextFrame.TextRange.Text = Join(lines, lineBreak)
+
+    ' --- Bold the category labels only; leave all other text non-bold ---
+    Dim finalText As String
+    Dim labels() As Variant
+    Dim lbl As Variant
+    Dim searchPos As Long
+    Dim foundPos As Long
+
+    finalText = shp.TextFrame.TextRange.Text
+    shp.TextFrame.TextRange.Font.Bold = False
+
+    labels = Array("Group:", "Workshop:", "Facilitator:", "Date:", "Attendees:", "Responses:", "Response Rate:")
+
+    For Each lbl In labels
+        searchPos = 1
+        Do
+            foundPos = InStr(searchPos, finalText, CStr(lbl))
+            If foundPos = 0 Then Exit Do
+
+            shp.TextFrame.TextRange.Characters(foundPos, Len(CStr(lbl))).Font.Bold = True
+
+            searchPos = foundPos + Len(CStr(lbl))
+        Loop
+    Next lbl
 End Sub
 
 ' Inserts newValue right after the label (e.g. "Workshop:"), keeping
-' everything else on the line untouched.
-Private Function InsertAfterLabel(lineText As String, label As String, newValue As String) As String
+' everything else on the line untouched. separator controls what goes
+' between the label and the value (defaults to a single space).
+Private Function InsertAfterLabel(lineText As String, label As String, newValue As String, Optional separator As String = " ") As String
     Dim pos As Long
     pos = InStr(lineText, label)
 
@@ -308,5 +391,263 @@ Private Function InsertAfterLabel(lineText As String, label As String, newValue 
     Dim insertPos As Long
     insertPos = pos + Len(label)
 
-    InsertAfterLabel = Left(lineText, insertPos) & " " & newValue & Mid(lineText, insertPos + 1)
+    InsertAfterLabel = Left(lineText, insertPos) & separator & newValue & Mid(lineText, insertPos + 1)
 End Function
+
+
+' Collects every non-empty value from column AU on the Data sheet, restricted
+' to whatever rows are present in dataRange. Handles BOTH a normal contiguous
+' range AND a non-contiguous Union range (e.g. from BuildWorkshopRange), since
+' it walks Areas/Rows rather than assuming a single contiguous block.
+Public Function GetAllValuesInRange(dataRange As Range) As Collection
+    Dim result As New Collection
+    Dim ws As Worksheet
+    Dim area As Range
+    Dim rw As Range
+    Dim auCell As Range
+
+    Set ws = dataRange.Worksheet
+
+    Debug.Print "---- Scanning " & dataRange.Address & " for non-empty AU values ----"
+
+    For Each area In dataRange.Areas
+        For Each rw In area.Rows
+            Set auCell = ws.Cells(rw.Row, "AU")
+            If Trim$(CStr(auCell.Value)) <> "" Then
+                result.Add auCell.Value
+                Debug.Print "Added: [" & auCell.Value & "] from " & auCell.Address
+            End If
+        Next rw
+    Next area
+
+    Debug.Print "Total non-empty values found: " & result.Count
+
+    Set GetAllValuesInRange = result
+End Function
+
+' Populates a textbox shape with the list of values gathered by
+' GetAllValuesInRange (or any Collection of values), as bullet points.
+Public Sub UpdateFeedbackTextBox(shp As Object, values As Collection)
+    If shp Is Nothing Then
+        Debug.Print "WARNING: Feedback shape not found, skipped."
+        Exit Sub
+    End If
+
+    Dim outputText As String
+    Dim item As Variant
+    Dim i As Long
+
+    If values Is Nothing Then
+        Debug.Print "WARNING: values Collection is Nothing, nothing to write."
+        shp.TextFrame.TextRange.Text = "No feedback available."
+        Exit Sub
+    End If
+
+    If values.Count = 0 Then
+        Debug.Print "No feedback values to display."
+        shp.TextFrame.TextRange.Text = "No feedback available."
+        Exit Sub
+    End If
+
+    i = 1
+    For Each item In values
+        outputText = outputText & CStr(item)
+        If i < values.Count Then
+            outputText = outputText & vbCrLf
+        End If
+        i = i + 1
+    Next item
+
+    Debug.Print "---- Writing " & values.Count & " feedback line(s) to shape ----"
+    shp.TextFrame.TextRange.Text = outputText
+End Sub
+
+' Looks up the Facilitator/Program(Content)/Recommend averages for a workshop
+' NAME on the Calculations sheet, using a fixed name -> (Facilitator cell,
+' Content cell, Recommend cell) map, since each workshop block sits at a
+' hardcoded spot on that sheet rather than a computable offset.
+'
+' NOTE: every block below uses the SAME row for all three cells (e.g.
+' "Q10/R10/S10") EXCEPT "CliftonStrengths for Students: Self-Discovery",
+' which was given as Q4/R5/S6 - three different rows. That's kept exactly
+' as specified; flagging it here in case it was meant to be Q4/R4/S4 like
+' the rest.
+Private Sub GetWorkshopAverages(calcWs As Worksheet, workshopName As String, ByRef facAvg As Double, ByRef contAvg As Double, ByRef recAvg As Double)
+    Dim map As Object
+    Set map = CreateObject("Scripting.Dictionary")
+    map.CompareMode = vbTextCompare ' case-insensitive keys
+
+    map.Add "CliftonStrengths for Students: Self-Discovery", Array("Q4", "R5", "S6")
+    map.Add "Addressing Conflict in Teams", Array("Q10", "R10", "S10")
+    map.Add "Fostering a Culture of Feedback", Array("Q16", "R16", "S16")
+    map.Add "ILI: Illinois Leadership Inventory", Array("Q22", "R22", "S22")
+    map.Add "Sustainability and Leadership", Array("Q28", "R28", "S28")
+    map.Add "Leading with Empathy and Compassion", Array("Q34", "R34", "S34")
+    map.Add "Expressing Gratitude with Intention", Array("AB4", "AC4", "AD4")
+    map.Add "Telling My Leadership Story", Array("AB10", "AC10", "AD10")
+    map.Add "Entering Community Partnerships", Array("AB16", "AC16", "AD16")
+    map.Add "Navigating Multicultural Organizations", Array("AB22", "AC22", "AD22")
+    map.Add "Making Strategic Decisions", Array("AB28", "AC28", "AD28")
+
+    facAvg = 0: contAvg = 0: recAvg = 0
+
+    If Not map.Exists(workshopName) Then
+        Debug.Print "WARNING: no fixed cell mapping for workshop '" & workshopName & "' - averages default to 0."
+        Exit Sub
+    End If
+
+    Dim addrs As Variant
+    addrs = map(workshopName)
+
+    If Not IsError(calcWs.Range(addrs(0)).Value) Then facAvg = calcWs.Range(addrs(0)).Value
+    If Not IsError(calcWs.Range(addrs(1)).Value) Then contAvg = calcWs.Range(addrs(1)).Value
+    If Not IsError(calcWs.Range(addrs(2)).Value) Then recAvg = calcWs.Range(addrs(2)).Value
+
+    Debug.Print "Averages for '" & workshopName & "': Facilitator=" & facAvg & " Content=" & contAvg & " Recommend=" & recAvg
+End Sub
+
+' Duplicates the correct arrow (Above/Below/Average) into each of the 3 box
+' slots, then deletes the original 3 template arrows. Uses Shape.Duplicate
+' instead of Copy/Paste - Copy/Paste through the clipboard is unreliable when
+' called several times in quick succession (it can paste stale content).
+'
+' shpAbove/shpBelow/shpAvgArrow ("Above Arrow" / "Below Arrow" / "Average
+' Arrow") are the fixed DIRECTION/GRAPHIC templates every new result arrow
+' gets duplicated FROM - they say what the arrow looks like, not where it
+' goes.
+'
+' shpFacBox/shpContBox/shpRecBox ("Facilitator Arrow" / "Content Arrow" /
+' "Recommended Arrow") are empty rectangles that mark WHERE each arrow
+' belongs and how big a footprint it has - the placed arrow is centered
+' inside each rectangle's Left/Top/Width/Height. These boxes live in the
+' "Workshop Layout" custom layout and are never deleted, so every slide has
+' them in the same place.
+'
+' IMPORTANT NAME COLLISION NOTE: the box shapes are named "Facilitator
+' Arrow" / "Content Arrow" / "Recommended Arrow" - the SAME strings used as
+' the ResultArrow Tag value for the placed result arrows. That's fine for
+' Tag-based lookups (RemoveAllShapesTagged/PlaceArrow only ever search by
+' Tag, never by Name for the result arrows), but it means the placed result
+' arrow must NOT reuse that string as its own .Name, or a later
+' pptSlide.Shapes("Facilitator Arrow") lookup would become ambiguous
+' between the box and the result arrow. So PlaceArrow tags the new shape
+' "Facilitator Arrow" (matches RemoveAllShapesTagged) but names it
+' "Facilitator Result Arrow" instead.
+Private Sub UpdateComparisonArrows(pptSlide As Object, facilitatorPct As Double, contentPct As Double, recommendedPct As Double, facAvg As Double, contAvg As Double, recAvg As Double)
+    Dim shpAbove As Object, shpBelow As Object, shpAvgArrow As Object
+    Dim shpFacBox As Object, shpContBox As Object, shpRecBox As Object
+
+    On Error Resume Next
+    Set shpAbove = pptSlide.Shapes("Above Arrow")
+    Set shpBelow = pptSlide.Shapes("Below Arrow")
+    Set shpAvgArrow = pptSlide.Shapes("Average Arrow")
+
+    ' Empty rectangles marking where/how big each arrow should be.
+    Set shpFacBox = pptSlide.Shapes("Facilitator Arrow")
+    Set shpContBox = pptSlide.Shapes("Content Arrow")
+    Set shpRecBox = pptSlide.Shapes("Recommended Arrow")
+    On Error GoTo 0
+
+    If shpAbove Is Nothing Or shpBelow Is Nothing Or shpAvgArrow Is Nothing Then
+        Debug.Print "WARNING: arrow template shape(s) not found (Above=" & (shpAbove Is Nothing) & _
+                    " Below=" & (shpBelow Is Nothing) & " Average=" & (shpAvgArrow Is Nothing) & "), skipping arrow placement."
+        Exit Sub
+    End If
+
+    If shpFacBox Is Nothing Or shpContBox Is Nothing Or shpRecBox Is Nothing Then
+        Debug.Print "WARNING: arrow box shape(s) not found (Facilitator=" & (shpFacBox Is Nothing) & _
+                    " Content=" & (shpContBox Is Nothing) & " Recommended=" & (shpRecBox Is Nothing) & "), skipping arrow placement."
+        Exit Sub
+    End If
+
+    ' --- Safety-net cleanup: remove ANY preexisting RESULT arrows, identified
+    ' by Tag (the direction templates and the empty boxes are untouched here -
+    ' neither has a ResultArrow tag). ---
+    RemoveAllShapesTagged pptSlide, "Facilitator Arrow"
+    RemoveAllShapesTagged pptSlide, "Content Arrow"
+    RemoveAllShapesTagged pptSlide, "Recommended Arrow"
+
+    PlaceArrow shpAbove, shpBelow, shpAvgArrow, CompareToAverage(facilitatorPct, facAvg), shpFacBox, "Facilitator Arrow", "Facilitator Result Arrow"
+    PlaceArrow shpAbove, shpBelow, shpAvgArrow, CompareToAverage(contentPct, contAvg), shpContBox, "Content Arrow", "Content Result Arrow"
+    PlaceArrow shpAbove, shpBelow, shpAvgArrow, CompareToAverage(recommendedPct, recAvg), shpRecBox, "Recommended Arrow", "Recommended Result Arrow"
+
+    ' --- Now that the correct duplicates are placed and tagged, it's safe to
+    ' remove the original 3 direction/graphic templates. The empty boxes are
+    ' left in place - they stay on every slide as invisible position/size
+    ' markers for the next run. ---
+    shpAbove.Delete
+    shpBelow.Delete
+    shpAvgArrow.Delete
+End Sub
+
+' Deletes EVERY shape on pptSlide whose ResultArrow tag matches tagValue.
+' Tags are used instead of Name because PowerPoint does not enforce unique
+' shape names - a stale shape could share a name with a shape we intend to
+' keep, or a rename could silently not "stick" in edge cases. Tags.Item
+' returns "" (not an error) when the tag isn't set, so no error handling
+' is needed around the lookup itself.
+Private Sub RemoveAllShapesTagged(pptSlide As Object, tagValue As String)
+    Dim i As Long
+    Dim removedCount As Long
+    removedCount = 0
+
+    For i = pptSlide.Shapes.Count To 1 Step -1
+        If pptSlide.Shapes(i).Tags("ResultArrow") = tagValue Then
+            Debug.Print "Removing tagged shape: Name=[" & pptSlide.Shapes(i).Name & "] Tag=[" & tagValue & "]"
+            pptSlide.Shapes(i).Delete
+            removedCount = removedCount + 1
+        End If
+    Next i
+
+    If removedCount > 0 Then
+        Debug.Print "Removed " & removedCount & " shape(s) tagged: " & tagValue
+    Else
+        Debug.Print "No shapes found tagged: " & tagValue
+    End If
+End Sub
+
+' Duplicates whichever master arrow matches resultType and centers the copy
+' inside boxShape (using the box's own Left/Top/Width/Height, so the arrow's
+' size relative to the box doesn't matter - it always ends up centered).
+' Tags the new shape with "ResultArrow" = tagValue so it can be found and
+' removed reliably later (see RemoveAllShapesTagged), and names it
+' shapeName - kept deliberately DIFFERENT from boxShape's own name so a
+' later Shapes("Facilitator Arrow")-style lookup of the box stays
+' unambiguous (see the name-collision note above UpdateComparisonArrows).
+Private Sub PlaceArrow(shpAbove As Object, shpBelow As Object, shpAvgArrow As Object, resultType As String, boxShape As Object, tagValue As String, shapeName As String)
+    Dim masterShp As Object
+    Dim newShp As Object
+
+    Select Case resultType
+        Case "Above": Set masterShp = shpAbove
+        Case "Below": Set masterShp = shpBelow
+        Case Else: Set masterShp = shpAvgArrow
+    End Select
+
+    Set newShp = masterShp.Duplicate.item(1)
+
+    ' Center the arrow inside the box's bounds rather than snapping to its
+    ' top-left corner.
+    newShp.Left = boxShape.Left + (boxShape.Width - newShp.Width) / 2
+    newShp.Top = boxShape.Top + (boxShape.Height - newShp.Height) / 2
+
+    newShp.Name = shapeName
+    newShp.Tags.Add "ResultArrow", tagValue
+End Sub
+
+' "Above"/"Below"/"Average", comparing rounded whole percents (matches the 0% display format).
+Private Function CompareToAverage(pct As Double, avg As Double) As String
+    Dim pctRounded As Long, avgRounded As Long
+    pctRounded = CLng(Application.WorksheetFunction.Round(pct * 100, 0))
+    avgRounded = CLng(Application.WorksheetFunction.Round(avg * 100, 0))
+
+    If pctRounded > avgRounded Then
+        CompareToAverage = "Above"
+    ElseIf pctRounded < avgRounded Then
+        CompareToAverage = "Below"
+    Else
+        CompareToAverage = "Average"
+    End If
+End Function
+
+
