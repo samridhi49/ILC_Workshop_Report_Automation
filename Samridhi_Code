@@ -30,9 +30,9 @@ Sub CreateSlidesForSelectedWorkshops()
     Set uniqueWorkshops = CreateObject("Scripting.Dictionary")
 
     For Each cell In Selection
-        workshopName = Trim(dataWs.Cells(cell.Row, "E").Value)
-        facilitatorName = Trim(dataWs.Cells(cell.Row, "G").Value)
-        workshopDate = Trim(dataWs.Cells(cell.Row, "F").Value)
+        workshopName = CleanText(dataWs.Cells(cell.Row, "E").Value)
+        facilitatorName = CleanText(dataWs.Cells(cell.Row, "G").Value)
+        workshopDate = CleanText(dataWs.Cells(cell.Row, "F").Value)
 
         If workshopName <> "" Then
             comboKey = workshopName & "||" & facilitatorName & "||" & workshopDate
@@ -91,6 +91,20 @@ Sub CreateSlidesForSelectedWorkshops()
     MsgBox "Generated " & uniqueWorkshops.Count & " slide(s) for unique workshop instance(s) :)", vbInformation
 End Sub
 
+' Trim() only strips LEADING/TRAILING spaces - it does NOT remove an embedded
+' line break (e.g. an accidental Alt+Enter typed into a Data-sheet cell).
+' A hidden vbCr/vbLf inside a workshop name/facilitator/date would ride
+' along silently through every Trim() call and then show up as an actual
+' newline once inserted into a PowerPoint textbox - which is exactly why
+' this exists. Used everywhere a workshop-name/facilitator/date value is
+' read from the Data sheet, both for matching rows and for display, so a
+' stray character in one cell can't (a) silently break row-matching by
+' making the "cleaned" workshopName param no longer equal the "dirty" raw
+' cell text, or (b) leak an unwanted line break into a slide.
+Private Function CleanText(s As String) As String
+    CleanText = Trim(Replace(Replace(Replace(CStr(s), vbCrLf, " "), vbCr, " "), vbLf, " "))
+End Function
+
 ' Returns a Union range of every row in dataWs whose Name (E), Facilitator (G),
 ' and Date (F) all match the given workshop instance. This range is what gets
 ' passed downstream as "workshopRange" - GetAllValuesInRange uses it to pull
@@ -103,9 +117,9 @@ Private Function BuildWorkshopRange(dataWs As Worksheet, workshopName As String,
     lastRow = dataWs.Cells(dataWs.Rows.Count, "E").End(xlUp).Row
 
     For r = 2 To lastRow
-        If Trim(dataWs.Cells(r, "E").Value) = workshopName _
-           And Trim(dataWs.Cells(r, "G").Value) = facilitatorName _
-           And Trim(dataWs.Cells(r, "F").Value) = workshopDate Then
+        If CleanText(dataWs.Cells(r, "E").Value) = workshopName _
+           And CleanText(dataWs.Cells(r, "G").Value) = facilitatorName _
+           And CleanText(dataWs.Cells(r, "F").Value) = workshopDate Then
 
             If result Is Nothing Then
                 Set result = dataWs.Cells(r, "E")
@@ -249,9 +263,9 @@ Function ComputeAgreePercent(dataWs As Worksheet, workshopName As String, facili
     totalCount = 0
 
     For r = 2 To lastRow
-        If Trim(dataWs.Cells(r, "E").Value) = workshopName _
-           And Trim(dataWs.Cells(r, "G").Value) = facilitatorName _
-           And Trim(dataWs.Cells(r, "F").Value) = workshopDate Then
+        If CleanText(dataWs.Cells(r, "E").Value) = workshopName _
+           And CleanText(dataWs.Cells(r, "G").Value) = facilitatorName _
+           And CleanText(dataWs.Cells(r, "F").Value) = workshopDate Then
 
             cellVal = Trim(dataWs.Cells(r, colLetter).Value)
             If cellVal <> "" Then
@@ -371,11 +385,11 @@ Private Sub UpdateWorkshopInfoBox(shp As Object, workshopName As String, facilit
         End If
 
         If InStr(lines(i), "Facilitator:") > 0 And InStr(lines(i), facilitatorName) = 0 Then
-            lines(i) = InsertAfterLabel(lines(i), "Facilitator:", facilitatorName, spacer)
+            lines(i) = InsertAfterLabel(lines(i), "Facilitator:", facilitatorName, vbNullString)
         End If
 
         If InStr(lines(i), "Date:") > 0 And InStr(lines(i), workshopDate) = 0 Then
-            lines(i) = InsertAfterLabel(lines(i), "Date:", workshopDate, spacer)
+            lines(i) = InsertAfterLabel(lines(i), "Date:", workshopDate, spacer & spacer)
         End If
 
         If InStr(lines(i), "Responses:") > 0 And InStr(lines(i), CStr(responseCount)) = 0 Then
