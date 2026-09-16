@@ -638,10 +638,11 @@ Private Sub UpdateComparisonArrows(pptSlide As Object, facilitatorPct As Double,
     shpAvgArrow.Delete
 End Sub
 
-' Sets the three "X Percent Comparison" textboxes. Uses a wider tolerance
-' than the arrows: anything within 4 percentage points of average (in
-' either direction) reads as "about average" in the text, even if the
-' arrow itself is showing a strict Above/Below result.
+' Sets the three "X Percent Comparison" textboxes. Uses CompareToAverageForText,
+' a WIDER tolerance than the arrows: anything within 4 percentage points of
+' average (in either direction) reads as "about average" in the sentence, even
+' if the arrow itself (which uses the strict CompareToAverage below) is
+' showing a strict Above/Below result.
 Private Sub UpdateComparisonTextBoxes(pptSlide As Object, facilitatorPct As Double, contentPct As Double, recommendedPct As Double, facAvg As Double, contAvg As Double, recAvg As Double)
     Dim shpFacText As Object, shpContText As Object, shpRecText As Object
 
@@ -649,15 +650,36 @@ Private Sub UpdateComparisonTextBoxes(pptSlide As Object, facilitatorPct As Doub
     Set shpContText = FindShapeByName(pptSlide, "Content Comparison")
     Set shpRecText = FindShapeByName(pptSlide, "Recommended Comparison")
 
-    SetComparisonText shpFacText, CompareToAverage(facilitatorPct, facAvg)
-    SetComparisonText shpContText, CompareToAverage(contentPct, contAvg)
-    SetComparisonText shpRecText, CompareToAverage(recommendedPct, recAvg)
+    SetComparisonText shpFacText, CompareToAverageForText(facilitatorPct, facAvg)
+    SetComparisonText shpContText, CompareToAverageForText(contentPct, contAvg)
+    SetComparisonText shpRecText, CompareToAverageForText(recommendedPct, recAvg)
 End Sub
+
+' "Above"/"Below"/"Average", comparing rounded whole percents (matches the 0%
+' display format). STRICT - no tolerance band. Used for the ARROWS only
+' (UpdateComparisonArrows). Do not repoint this at the tolerance-band version
+' below - that was the bug that made the arrows and the comparison sentences
+' disagree (arrows were accidentally using the +/-4 point tolerance meant only
+' for the sentences).
+Private Function CompareToAverage(pct As Double, avg As Double) As String
+    Dim pctRounded As Long, avgRounded As Long
+    pctRounded = CLng(Application.WorksheetFunction.Round(pct * 100, 0))
+    avgRounded = CLng(Application.WorksheetFunction.Round(avg * 100, 0))
+
+    If pctRounded > avgRounded Then
+        CompareToAverage = "Above"
+    ElseIf pctRounded < avgRounded Then
+        CompareToAverage = "Below"
+    Else
+        CompareToAverage = "Average"
+    End If
+End Function
 
 ' Same idea as CompareToAverage (rounded whole percents), but with a
 ' +/-4 percentage point tolerance band around average that reads as
-' "Average" - used only for the comparison SENTENCES, not the arrows.
-Private Function CompareToAverage(pct As Double, avg As Double) As String
+' "Average" - used ONLY for the comparison SENTENCES (UpdateComparisonTextBoxes),
+' never for the arrows.
+Private Function CompareToAverageForText(pct As Double, avg As Double) As String
     Dim pctRounded As Long, avgRounded As Long
     Dim diff As Long
 
@@ -666,11 +688,11 @@ Private Function CompareToAverage(pct As Double, avg As Double) As String
     diff = pctRounded - avgRounded
 
     If Abs(diff) <= 4 Then
-        CompareToAverage = "Average"
+        CompareToAverageForText = "Average"
     ElseIf diff > 0 Then
-        CompareToAverage = "Above"
+        CompareToAverageForText = "Above"
     Else
-        CompareToAverage = "Below"
+        CompareToAverageForText = "Below"
     End If
 End Function
 
@@ -702,7 +724,7 @@ Private Function FindShapeByName(pptSlide As Object, targetName As String) As Ob
 End Function
 ' Writes the "For this type of workshop, this is ___ average." sentence
 ' into shp, with the blank filled in from resultType ("Above"/"Below"/"Average" -
-' the same three values CompareToAverage returns for the arrows).
+' the same three values CompareToAverageForText returns).
 Private Sub SetComparisonText(shp As Object, resultType As String)
     If shp Is Nothing Then
         Debug.Print "WARNING: comparison text shape not found, skipped."
@@ -791,23 +813,21 @@ End Sub
 ' or forcing a window repaint - never reliably worked, because none of those
 ' actually invalidate PowerPoint's cached rendering of an embedded chart.
 ' That cache is normally only invalidated as a side effect of a HUMAN
-' opening and closing the Edit Data window - which is exactly the behavior
-' you were seeing (data correct, but only visible after manually clicking
-' into the chart).
+' opening and closing the Edit Data window.
 '
 ' SeriesCollection(j).Values / .Name / .XValues write directly to the data
-' the chart engine actually renders from, so the update is immediate and
-' guaranteed, with no caching layer to fight and no Excel Automation
-' lifecycle (separate-instance detection, Close/Save timing, etc.) to
-' manage at all.
+' the chart engine actually renders the PLOTTED VALUES from, so the bars
+' update immediately and reliably. But the CATEGORY AXIS LABELS still only
+' appeared after a human opened Edit Data, because the axis label cache is
+' a separate store that isn't reliably re-derived from XValues alone.
 '
-' TRADEOFF: this disconnects each series from the embedded workbook's cell
-' range - the series formula becomes a literal array (={1,2,3,...}) instead
-' of a live reference like ='Sheet1'!$B$2:$D$2. The slide's chart still
-' displays correctly and Edit Data still opens fine; it just no longer
-' shows a formula tied to a cell if someone inspects a series manually.
-' Since nothing in this workflow relies on manually re-editing that
-' embedded sheet later, this tradeoff is a non-issue in practice.
+' FIX: rather than fight the cache with redraw tricks (toggling ChartType,
+' etc. - tried before, unreliable, and risks aborting the sub on error),
+' just do programmatically exactly what a human does to invalidate it:
+' open the embedded ChartData workbook, then immediately close it. This is
+' wrapped in its own On Error Resume Next / On Error GoTo 0 pair so that if
+' it ever fails for some reason (e.g. OLE activation hiccup), it can't take
+' down the rest of the sub or the SeriesError handler below.
 Private Sub UpdateWorkshopChart(shpChart As Object, workshopName As String, dataWs As Worksheet, calcWs As Worksheet)
     If shpChart Is Nothing Then
         Debug.Print "WARNING: Learning Outcomes Chart shape not found, skipped."
@@ -883,7 +903,8 @@ Private Sub UpdateWorkshopChart(shpChart As Object, workshopName As String, data
     dataTextMap(5) = "strongly agree"
 
     ' ---- Build the 3x5 table (rows/labels reversed for the series flip, same
-    ' as before) ----
+    ' as before). Each axis label is prefixed with "Can " (e.g. Calculations
+    ' sheet text "describe the five..." becomes "Can describe the five..."). ----
     Dim rowLabels(1 To 3) As String
     Dim counts(1 To 3, 1 To 5) As Long
 
@@ -901,7 +922,7 @@ Private Sub UpdateWorkshopChart(shpChart As Object, workshopName As String, data
         Dim targetRow As Long
         targetRow = 4 - k   ' k=1 -> row 3, k=2 -> row 2, k=3 -> row 1 (reversed order)
 
-        rowLabels(targetRow) = calcWs.Range(labelCell).Value
+        rowLabels(targetRow) = "Can " & calcWs.Range(labelCell).Value
 
         For j = 1 To 5
             Dim cnt As Long
@@ -942,6 +963,20 @@ Private Sub UpdateWorkshopChart(shpChart As Object, workshopName As String, data
 
     On Error GoTo 0
 
+    ' --- Invalidate PowerPoint's cached axis-label rendering by doing
+    ' programmatically what a human does when they click Edit Data and
+    ' close it again - open the embedded ChartData workbook, then
+    ' immediately close it. This is what actually forces the new category
+    ' labels to paint without requiring a manual click. Isolated error
+    ' handling so a failure here can't abort the rest of the run. ---
+    On Error Resume Next
+    cht.ChartData.Activate
+    DoEvents
+    If Not cht.ChartData.Workbook Is Nothing Then
+        cht.ChartData.Workbook.Close SaveChanges:=False
+    End If
+    On Error GoTo 0
+
     Debug.Print "Updated Learning Outcomes Chart for workshop: " & workshopName
     Exit Sub
 
@@ -949,3 +984,5 @@ SeriesError:
     Debug.Print "WARNING: failed writing chart series " & j & " for '" & workshopName & "' - Err " & Err.Number & ": " & Err.Description & ". Chart may not have exactly 5 series; check its series count matches the 5 Likert categories."
     On Error GoTo 0
 End Sub
+
+
