@@ -295,6 +295,7 @@ Private Sub UpdatePercentLine(shp As Object, newPercentText As String)
 
     If paraCount > 1 Then
         shp.TextFrame.TextRange.Paragraphs(2, paraCount - 1).Font.Size = 14
+        shp.TextFrame.TextRange.Paragraphs(2, paraCount - 1).Font.Bold = False
     End If
 End Sub
 
@@ -361,6 +362,9 @@ Private Sub UpdateWorkshopInfoBox(shp As Object, workshopName As String, facilit
     Dim lbl As Variant
     Dim searchPos As Long
     Dim foundPos As Long
+    Dim valueStart As Long
+    Dim valueEnd As Long
+    Dim lineBreakPos As Long
 
     finalText = shp.TextFrame.TextRange.Text
     shp.TextFrame.TextRange.Font.Bold = False
@@ -374,6 +378,27 @@ Private Sub UpdateWorkshopInfoBox(shp As Object, workshopName As String, facilit
             If foundPos = 0 Then Exit Do
 
             shp.TextFrame.TextRange.Characters(foundPos, Len(CStr(lbl))).Font.Bold = True
+
+            ' Set font size 12 for Attendees, Responses, and Response Rate labels
+            If CStr(lbl) = "Attendees:" Or CStr(lbl) = "Responses:" Or CStr(lbl) = "Response Rate:" Then
+                shp.TextFrame.TextRange.Characters(foundPos, Len(CStr(lbl))).Font.Size = 12
+
+                ' Find the value text that follows the label, up to the end of the line
+                valueStart = foundPos + Len(CStr(lbl))
+                lineBreakPos = InStr(valueStart, finalText, vbCr)
+                If lineBreakPos = 0 Then
+                    valueEnd = Len(finalText)
+                Else
+                    valueEnd = lineBreakPos - 1
+                End If
+
+                If valueEnd >= valueStart Then
+                    With shp.TextFrame.TextRange.Characters(valueStart, valueEnd - valueStart + 1).Font
+                        .Bold = False
+                        .Size = 12
+                    End With
+                End If
+            End If
 
             searchPos = foundPos + Len(CStr(lbl))
         Loop
@@ -595,15 +620,15 @@ Private Sub UpdateComparisonTextBoxes(pptSlide As Object, facilitatorPct As Doub
     Set shpContText = FindShapeByName(pptSlide, "Content Comparison")
     Set shpRecText = FindShapeByName(pptSlide, "Recommended Comparison")
 
-    SetComparisonText shpFacText, CompareToAverageForText(facilitatorPct, facAvg)
-    SetComparisonText shpContText, CompareToAverageForText(contentPct, contAvg)
-    SetComparisonText shpRecText, CompareToAverageForText(recommendedPct, recAvg)
+    SetComparisonText shpFacText, CompareToAverage(facilitatorPct, facAvg)
+    SetComparisonText shpContText, CompareToAverage(contentPct, contAvg)
+    SetComparisonText shpRecText, CompareToAverage(recommendedPct, recAvg)
 End Sub
 
 ' Same idea as CompareToAverage (rounded whole percents), but with a
 ' +/-4 percentage point tolerance band around average that reads as
 ' "Average" - used only for the comparison SENTENCES, not the arrows.
-Private Function CompareToAverageForText(pct As Double, avg As Double) As String
+Private Function CompareToAverage(pct As Double, avg As Double) As String
     Dim pctRounded As Long, avgRounded As Long
     Dim diff As Long
 
@@ -612,11 +637,11 @@ Private Function CompareToAverageForText(pct As Double, avg As Double) As String
     diff = pctRounded - avgRounded
 
     If Abs(diff) <= 4 Then
-        CompareToAverageForText = "Average"
+        CompareToAverage = "Average"
     ElseIf diff > 0 Then
-        CompareToAverageForText = "Above"
+        CompareToAverage = "Above"
     Else
-        CompareToAverageForText = "Below"
+        CompareToAverage = "Below"
     End If
 End Function
 
@@ -725,19 +750,3 @@ Private Sub PlaceArrow(shpAbove As Object, shpBelow As Object, shpAvgArrow As Ob
     newShp.Name = shapeName
     newShp.Tags.Add "ResultArrow", tagValue
 End Sub
-
-' "Above"/"Below"/"Average", comparing rounded whole percents (matches the 0% display format).
-Private Function CompareToAverage(pct As Double, avg As Double) As String
-    Dim pctRounded As Long, avgRounded As Long
-    pctRounded = CLng(Application.WorksheetFunction.Round(pct * 100, 0))
-    avgRounded = CLng(Application.WorksheetFunction.Round(avg * 100, 0))
-
-    If pctRounded > avgRounded Then
-        CompareToAverage = "Above"
-    ElseIf pctRounded < avgRounded Then
-        CompareToAverage = "Below"
-    Else
-        CompareToAverage = "Average"
-    End If
-End Function
-
