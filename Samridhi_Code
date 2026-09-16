@@ -17,7 +17,7 @@ Sub CreateSlidesForSelectedWorkshops()
 
     Set dataWs = ThisWorkbook.Sheets("Data")
 
-    templatePath = "Z:\Illinois Leadership Center\Student Staff\ART\Reports - Workshops\Automation\New Template September 14.potx"
+    templatePath = "Z:\Illinois Leadership Center\Student Staff\ART\Reports - Workshops\Automation\New Template September 16.potx"
 
     If TypeName(Selection) <> "Range" Then
         MsgBox "Please select a range of cells containing workshop names first.", vbExclamation
@@ -121,14 +121,40 @@ End Function
 Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs As Worksheet, workshopName As String, facilitatorName As String, workshopDate As String, workshopRange As Range)
     Dim pptSlide As Object
     Dim i As Long
+    Dim calcWs As Worksheet
+
+    Set calcWs = ThisWorkbook.Sheets("Calculations")
 
     Set pptSlide = pptPres.Slides.AddSlide(pptPres.Slides.Count + 1, pptLayout)
 
     If pptSlide.Shapes.Count = 0 And pptLayout.Shapes.Count > 0 Then
         For i = 1 To pptLayout.Shapes.Count
-            pptLayout.Shapes(i).Copy
-            pptSlide.Shapes.Paste
+            ' Skip the chart here - it gets pasted separately, in isolation,
+            ' right below. Copy/Paste through the clipboard is unreliable
+            ' when called many times back-to-back (see the arrow-duplication
+            ' notes elsewhere in this module), and that unreliability hits
+            ' the chart hardest because it carries a full embedded OLE
+            ' package, not just a picture/shape. Sweeping it into this same
+            ' tight loop alongside every other layout shape was very likely
+            ' why the chart's embedded data ended up aliased/shared across
+            ' slides (all charts showing the LAST workshop's numbers), and
+            ' why trying to Duplicate that already-pasted, possibly
+            ' not-yet-fully-committed chart afterward sometimes produced no
+            ' working chart at all.
+            If Trim(pptLayout.Shapes(i).Name) <> "Learning Outcomes Chart" Then
+                pptLayout.Shapes(i).Copy
+                pptSlide.Shapes.Paste
+            End If
         Next i
+
+        ' --- Paste the chart on its own: one isolated Copy/Paste, nothing
+        ' else touching the clipboard immediately before or after it,
+        ' sourced straight from the untouched layout master. Same principle
+        ' as the arrow templates - one clean operation per slide. ---
+        On Error Resume Next
+        pptLayout.Shapes("Learning Outcomes Chart").Copy
+        pptSlide.Shapes.Paste
+        On Error GoTo 0
     End If
 
     ' --- Diagnostic: list every shape now on the slide, with its Name AND
@@ -155,6 +181,7 @@ Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs
     Dim shpRecommended As Object
     Dim shpInfo As Object
     Dim shpFeedback As Object
+    Dim shpChart As Object
 
     On Error Resume Next
     Set shpFacilitator = pptSlide.Shapes("Facilitator Percent")
@@ -162,6 +189,7 @@ Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs
     Set shpRecommended = pptSlide.Shapes("Recommended Percent")
     Set shpInfo = pptSlide.Shapes("Workshop Information")
     Set shpFeedback = pptSlide.Shapes("Feedback Textbox")
+    Set shpChart = pptSlide.Shapes("Learning Outcomes Chart")
     On Error GoTo 0
 
     ' --- Percentages (scoped to THIS workshop instance only) ---
@@ -178,13 +206,15 @@ Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs
     UpdatePercentLine shpRecommended, Format(recommendedPct, "0%")
 
     ' --- Comparison arrows (vs. workshop-type averages on Calculations sheet) ---
-    Dim calcWs As Worksheet
     Dim facAvg As Double, contAvg As Double, recAvg As Double
 
-    Set calcWs = ThisWorkbook.Sheets("Calculations")
     GetWorkshopAverages calcWs, workshopName, facAvg, contAvg, recAvg
 
     UpdateComparisonArrows pptSlide, facilitatorPct, contentPct, recommendedPct, facAvg, contAvg, recAvg
+
+    ' --- Comparison textboxes (sentence version of the same Above/Below/Average
+    ' result used for the arrows, so text and arrows always agree) ---
+    UpdateComparisonTextBoxes pptSlide, facilitatorPct, contentPct, recommendedPct, facAvg, contAvg, recAvg
 
     ' --- Response count: workshopRange is a Union of one cell per matching row,
     ' so .Cells.Count IS the response count for this specific instance. ---
@@ -197,6 +227,9 @@ Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs
 
     UpdateWorkshopInfoBox shpInfo, workshopName, facilitatorName, workshopDate, responseCount
     UpdateFeedbackTextBox shpFeedback, feedbackValues
+
+    ' --- Learning outcomes chart: rebuild its 3x5 data table for this workshop ---
+    UpdateWorkshopChart shpChart, workshopName, dataWs, calcWs
 
     Set pptSlide = Nothing
 End Sub
@@ -291,6 +324,7 @@ Private Sub UpdatePercentLine(shp As Object, newPercentText As String)
 
     If paraCount > 1 Then
         shp.TextFrame.TextRange.Paragraphs(2, paraCount - 1).Font.Size = 14
+        shp.TextFrame.TextRange.Paragraphs(2, paraCount - 1).Font.Bold = False
     End If
 End Sub
 
@@ -357,6 +391,9 @@ Private Sub UpdateWorkshopInfoBox(shp As Object, workshopName As String, facilit
     Dim lbl As Variant
     Dim searchPos As Long
     Dim foundPos As Long
+    Dim valueStart As Long
+    Dim valueEnd As Long
+    Dim lineBreakPos As Long
 
     finalText = shp.TextFrame.TextRange.Text
     shp.TextFrame.TextRange.Font.Bold = False
@@ -370,6 +407,27 @@ Private Sub UpdateWorkshopInfoBox(shp As Object, workshopName As String, facilit
             If foundPos = 0 Then Exit Do
 
             shp.TextFrame.TextRange.Characters(foundPos, Len(CStr(lbl))).Font.Bold = True
+
+            ' Set font size 12 for Attendees, Responses, and Response Rate labels
+            If CStr(lbl) = "Attendees:" Or CStr(lbl) = "Responses:" Or CStr(lbl) = "Response Rate:" Then
+                shp.TextFrame.TextRange.Characters(foundPos, Len(CStr(lbl))).Font.Size = 12
+
+                ' Find the value text that follows the label, up to the end of the line
+                valueStart = foundPos + Len(CStr(lbl))
+                lineBreakPos = InStr(valueStart, finalText, vbCr)
+                If lineBreakPos = 0 Then
+                    valueEnd = Len(finalText)
+                Else
+                    valueEnd = lineBreakPos - 1
+                End If
+
+                If valueEnd >= valueStart Then
+                    With shp.TextFrame.TextRange.Characters(valueStart, valueEnd - valueStart + 1).Font
+                        .Bold = False
+                        .Size = 12
+                    End With
+                End If
+            End If
 
             searchPos = foundPos + Len(CStr(lbl))
         Loop
@@ -580,6 +638,93 @@ Private Sub UpdateComparisonArrows(pptSlide As Object, facilitatorPct As Double,
     shpAvgArrow.Delete
 End Sub
 
+' Sets the three "X Percent Comparison" textboxes. Uses a wider tolerance
+' than the arrows: anything within 4 percentage points of average (in
+' either direction) reads as "about average" in the text, even if the
+' arrow itself is showing a strict Above/Below result.
+Private Sub UpdateComparisonTextBoxes(pptSlide As Object, facilitatorPct As Double, contentPct As Double, recommendedPct As Double, facAvg As Double, contAvg As Double, recAvg As Double)
+    Dim shpFacText As Object, shpContText As Object, shpRecText As Object
+
+    Set shpFacText = FindShapeByName(pptSlide, "Facilitator Comparison")
+    Set shpContText = FindShapeByName(pptSlide, "Content Comparison")
+    Set shpRecText = FindShapeByName(pptSlide, "Recommended Comparison")
+
+    SetComparisonText shpFacText, CompareToAverage(facilitatorPct, facAvg)
+    SetComparisonText shpContText, CompareToAverage(contentPct, contAvg)
+    SetComparisonText shpRecText, CompareToAverage(recommendedPct, recAvg)
+End Sub
+
+' Same idea as CompareToAverage (rounded whole percents), but with a
+' +/-4 percentage point tolerance band around average that reads as
+' "Average" - used only for the comparison SENTENCES, not the arrows.
+Private Function CompareToAverage(pct As Double, avg As Double) As String
+    Dim pctRounded As Long, avgRounded As Long
+    Dim diff As Long
+
+    pctRounded = CLng(Application.WorksheetFunction.Round(pct * 100, 0))
+    avgRounded = CLng(Application.WorksheetFunction.Round(avg * 100, 0))
+    diff = pctRounded - avgRounded
+
+    If Abs(diff) <= 4 Then
+        CompareToAverage = "Average"
+    ElseIf diff > 0 Then
+        CompareToAverage = "Above"
+    Else
+        CompareToAverage = "Below"
+    End If
+End Function
+
+' Case-insensitive, whitespace-tolerant shape lookup by name, with logging.
+' pptSlide.Shapes("exact name") is case-sensitive-ish and whitespace-strict
+' enough that a trailing space or different capitalization in the actual
+' shape name will silently fail to find it (especially under
+' On Error Resume Next). This walks every shape and compares trimmed,
+' lowercased names instead, and logs every shape name it sees so a
+' mismatch is visible in the Immediate window (Ctrl+G).
+Private Function FindShapeByName(pptSlide As Object, targetName As String) As Object
+    Dim i As Long
+    Dim shp As Object
+
+    For i = 1 To pptSlide.Shapes.Count
+        Set shp = pptSlide.Shapes(i)
+        If LCase(Trim(shp.Name)) = LCase(Trim(targetName)) Then
+            Set FindShapeByName = shp
+            Exit Function
+        End If
+    Next i
+
+    Debug.Print "WARNING: no shape found matching name '" & targetName & "'. Shapes on slide are:"
+    For i = 1 To pptSlide.Shapes.Count
+        Debug.Print "   [" & pptSlide.Shapes(i).Name & "]"
+    Next i
+
+    Set FindShapeByName = Nothing
+End Function
+' Writes the "For this type of workshop, this is ___ average." sentence
+' into shp, with the blank filled in from resultType ("Above"/"Below"/"Average" -
+' the same three values CompareToAverage returns for the arrows).
+Private Sub SetComparisonText(shp As Object, resultType As String)
+    If shp Is Nothing Then
+        Debug.Print "WARNING: comparison text shape not found, skipped."
+        Exit Sub
+    End If
+
+    If Not shp.HasTextFrame Then
+        Debug.Print "WARNING: shape '" & shp.Name & "' has no text frame, skipped."
+        Exit Sub
+    End If
+
+    Dim comparisonWord As String
+    Select Case resultType
+        Case "Above": comparisonWord = "above"
+        Case "Below": comparisonWord = "below"
+        Case Else: comparisonWord = "about"
+    End Select
+
+    shp.TextFrame.TextRange.Text = "For this type of workshop, this is " & comparisonWord & " average."
+    Debug.Print "Set '" & shp.Name & "' text to: " & shp.TextFrame.TextRange.Text
+End Sub
+
 ' Deletes EVERY shape on pptSlide whose ResultArrow tag matches tagValue.
 ' Tags are used instead of Name because PowerPoint does not enforce unique
 ' shape names - a stale shape could share a name with a shape we intend to
@@ -635,19 +780,172 @@ Private Sub PlaceArrow(shpAbove As Object, shpBelow As Object, shpAvgArrow As Ob
     newShp.Tags.Add "ResultArrow", tagValue
 End Sub
 
-' "Above"/"Below"/"Average", comparing rounded whole percents (matches the 0% display format).
-Private Function CompareToAverage(pct As Double, avg As Double) As String
-    Dim pctRounded As Long, avgRounded As Long
-    pctRounded = CLng(Application.WorksheetFunction.Round(pct * 100, 0))
-    avgRounded = CLng(Application.WorksheetFunction.Round(avg * 100, 0))
+' ===================== LEARNING OUTCOMES CHART =====================
 
-    If pctRounded > avgRounded Then
-        CompareToAverage = "Above"
-    ElseIf pctRounded < avgRounded Then
-        CompareToAverage = "Below"
-    Else
-        CompareToAverage = "Average"
+' Rebuilds the "Learning Outcomes Chart" for the given workshop by writing
+' DIRECTLY to the chart's SeriesCollection, not to the embedded ChartData
+' workbook. This is a deliberate change from the earlier approach:
+'
+' Writing to ChartData.Workbook (an embedded Excel instance) and then trying
+' to force PowerPoint to re-read it - via Chart.Refresh, toggling ChartType,
+' or forcing a window repaint - never reliably worked, because none of those
+' actually invalidate PowerPoint's cached rendering of an embedded chart.
+' That cache is normally only invalidated as a side effect of a HUMAN
+' opening and closing the Edit Data window - which is exactly the behavior
+' you were seeing (data correct, but only visible after manually clicking
+' into the chart).
+'
+' SeriesCollection(j).Values / .Name / .XValues write directly to the data
+' the chart engine actually renders from, so the update is immediate and
+' guaranteed, with no caching layer to fight and no Excel Automation
+' lifecycle (separate-instance detection, Close/Save timing, etc.) to
+' manage at all.
+'
+' TRADEOFF: this disconnects each series from the embedded workbook's cell
+' range - the series formula becomes a literal array (={1,2,3,...}) instead
+' of a live reference like ='Sheet1'!$B$2:$D$2. The slide's chart still
+' displays correctly and Edit Data still opens fine; it just no longer
+' shows a formula tied to a cell if someone inspects a series manually.
+' Since nothing in this workflow relies on manually re-editing that
+' embedded sheet later, this tradeoff is a non-issue in practice.
+Private Sub UpdateWorkshopChart(shpChart As Object, workshopName As String, dataWs As Worksheet, calcWs As Worksheet)
+    If shpChart Is Nothing Then
+        Debug.Print "WARNING: Learning Outcomes Chart shape not found, skipped."
+        Exit Sub
     End If
-End Function
 
+    If Not shpChart.HasChart Then
+        Debug.Print "WARNING: shape '" & shpChart.Name & "' does not contain a chart, skipped."
+        Exit Sub
+    End If
 
+    ' ---- Map: workshop -> 3 Data-tab columns (the sub-question columns) ----
+    Dim colMap As Object
+    Set colMap = CreateObject("Scripting.Dictionary")
+    colMap.CompareMode = vbTextCompare
+    colMap.Add "CliftonStrengths for Students: Self-Discovery", Array("N", "O", "P")
+    colMap.Add "Addressing Conflict in Teams", Array("H", "I", "J")
+    colMap.Add "Fostering a Culture of Feedback", Array("AF", "AG", "AH")
+    colMap.Add "ILI: Illinois Leadership Inventory", Array("Z", "AA", "AB")
+    colMap.Add "Sustainability and Leadership", Array("AI", "AJ", "AK")
+    colMap.Add "Leading with Empathy and Compassion", Array("T", "U", "V")
+    colMap.Add "Expressing Gratitude with Intention", Array("K", "L", "M")
+    colMap.Add "Telling My Leadership Story", Array("W", "X", "Y")
+    colMap.Add "Entering Community Partnerships", Array("AC", "AD", "AE")
+    colMap.Add "Navigating Multicultural Organizations", Array("Q", "R", "S")
+    colMap.Add "Making Strategic Decisions", Array("AL", "AM", "AN")
+
+    ' ---- Map: workshop -> {label column, starting row} of its 3-cell row-label
+    ' block on the Calculations sheet. Same block order as GetWorkshopAverages. ----
+    Dim rowLabelMap As Object
+    Set rowLabelMap = CreateObject("Scripting.Dictionary")
+    rowLabelMap.CompareMode = vbTextCompare
+    rowLabelMap.Add "CliftonStrengths for Students: Self-Discovery", Array("J", 4)
+    rowLabelMap.Add "Addressing Conflict in Teams", Array("J", 10)
+    rowLabelMap.Add "Fostering a Culture of Feedback", Array("J", 16)
+    rowLabelMap.Add "ILI: Illinois Leadership Inventory", Array("J", 22)
+    rowLabelMap.Add "Sustainability and Leadership", Array("J", 28)
+    rowLabelMap.Add "Leading with Empathy and Compassion", Array("J", 34)
+    rowLabelMap.Add "Expressing Gratitude with Intention", Array("U", 4)
+    rowLabelMap.Add "Telling My Leadership Story", Array("U", 10)
+    rowLabelMap.Add "Entering Community Partnerships", Array("U", 16)
+    rowLabelMap.Add "Navigating Multicultural Organizations", Array("U", 22)
+    rowLabelMap.Add "Making Strategic Decisions", Array("U", 28)
+
+    If Not colMap.Exists(workshopName) Or Not rowLabelMap.Exists(workshopName) Then
+        Debug.Print "WARNING: no chart mapping found for workshop '" & workshopName & "', chart skipped."
+        Exit Sub
+    End If
+
+    Dim dataCols As Variant
+    dataCols = colMap(workshopName)
+
+    Dim labelInfo As Variant
+    labelInfo = rowLabelMap(workshopName)
+    Dim labelCol As String
+    Dim labelStartRow As Long
+    labelCol = labelInfo(0)
+    labelStartRow = labelInfo(1)
+
+    ' ---- Likert categories: chart series name -> matching Data-tab text ----
+    Dim chartHeaders(1 To 5) As String
+    chartHeaders(1) = "Strongly Disagree"
+    chartHeaders(2) = "Disagree"
+    chartHeaders(3) = "Neither"
+    chartHeaders(4) = "Agree"
+    chartHeaders(5) = "Strongly Agree"
+
+    Dim dataTextMap(1 To 5) As String
+    dataTextMap(1) = "strongly disagree"
+    dataTextMap(2) = "somewhat disagree"
+    dataTextMap(3) = "neither agree nor disagree"
+    dataTextMap(4) = "somewhat agree"
+    dataTextMap(5) = "strongly agree"
+
+    ' ---- Build the 3x5 table (rows/labels reversed for the series flip, same
+    ' as before) ----
+    Dim rowLabels(1 To 3) As String
+    Dim counts(1 To 3, 1 To 5) As Long
+
+    Dim lastDataRow As Long
+    lastDataRow = dataWs.Cells(dataWs.Rows.Count, 1).End(xlUp).Row
+
+    Dim k As Long, j As Long, r As Long
+    For k = 1 To 3
+        Dim dataCol As String
+        dataCol = dataCols(k - 1)
+
+        Dim labelCell As String
+        labelCell = labelCol & (labelStartRow + (k - 1))
+
+        Dim targetRow As Long
+        targetRow = 4 - k   ' k=1 -> row 3, k=2 -> row 2, k=3 -> row 1 (reversed order)
+
+        rowLabels(targetRow) = calcWs.Range(labelCell).Value
+
+        For j = 1 To 5
+            Dim cnt As Long
+            cnt = 0
+            For r = 2 To lastDataRow  ' assumes row 1 of Data tab is headers
+                Dim cellVal As String
+                cellVal = LCase(Trim(CStr(dataWs.Range(dataCol & r).Value)))
+                If cellVal = dataTextMap(j) Then cnt = cnt + 1
+            Next r
+            counts(targetRow, j) = cnt
+        Next j
+    Next k
+
+    ' ---- Write directly to the chart's SeriesCollection ----
+    Dim cht As Object
+    Set cht = shpChart.Chart
+
+    On Error GoTo SeriesError
+
+    Dim catArr(1 To 3) As String
+    catArr(1) = rowLabels(1)
+    catArr(2) = rowLabels(2)
+    catArr(3) = rowLabels(3)
+
+    For j = 1 To 5
+        Dim ser As Object
+        Set ser = cht.SeriesCollection(j)
+
+        Dim valsArr(1 To 3) As Double
+        valsArr(1) = counts(1, j)
+        valsArr(2) = counts(2, j)
+        valsArr(3) = counts(3, j)
+
+        ser.values = valsArr
+        ser.Name = chartHeaders(j)
+        ser.XValues = catArr
+    Next j
+
+    On Error GoTo 0
+
+    Debug.Print "Updated Learning Outcomes Chart for workshop: " & workshopName
+    Exit Sub
+
+SeriesError:
+    Debug.Print "WARNING: failed writing chart series " & j & " for '" & workshopName & "' - Err " & Err.Number & ": " & Err.Description & ". Chart may not have exactly 5 series; check its series count matches the 5 Likert categories."
+    On Error GoTo 0
+End Sub
