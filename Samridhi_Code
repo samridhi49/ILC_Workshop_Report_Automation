@@ -1,3 +1,5 @@
+' ----- The chart data seems to be wrong though so might need to look into that -----
+
 Sub CreateSlidesForSelectedWorkshops()
     Dim pptApp As Object
     Dim pptPres As Object
