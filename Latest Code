@@ -1,4 +1,4 @@
-Sub CreateSlidesForSelectedWorkshops()
+ Sub CreateSlidesForSelectedWorkshops()
     Dim pptApp As Object
     Dim pptPres As Object
     Dim pptLayout As Object
@@ -10,6 +10,7 @@ Sub CreateSlidesForSelectedWorkshops()
     Dim workshopName As String
     Dim facilitatorName As String
     Dim workshopDate As String
+    Dim cellColor As Long
     Dim uniqueWorkshops As Object   ' Scripting.Dictionary, late-bound
     Dim comboKey As String
     Dim info As Variant
@@ -17,27 +18,33 @@ Sub CreateSlidesForSelectedWorkshops()
 
     Set dataWs = ThisWorkbook.Sheets("Data")
 
-    templatePath = "Z:\Illinois Leadership Center\Student Staff\ART\Reports - Workshops\Automation\New Template September 16.potx"
+    templatePath = "Z:\Illinois Leadership Center\Student Staff\ART\Reports - Workshops\Automation\Workshop Automation Template.potx"
 
     If TypeName(Selection) <> "Range" Then
         MsgBox "Please select a range of cells containing workshop names first.", vbExclamation
         Exit Sub
     End If
 
-    ' --- Build a list of UNIQUE workshop INSTANCES from the selection ---
-    ' A workshop instance = Name + Facilitator + Date, since the same
-    ' workshop name can occur multiple times with different facilitators/dates.
+    ' --- Build a list of UNIQUE workshop INSTANCES from the selection. A
+    ' workshop instance = Name + Facilitator + Date + the fill COLOR of the
+    ' selected cell itself. Color is included because Name+Facilitator+Date
+    ' alone isn't always enough to tell two sessions apart in the data - the
+    ' cells are color-coded by the person building the selection, and cells
+    ' sharing the same color are meant to be treated as the same workshop
+    ' instance (grouped onto one slide), even if two DIFFERENT instances
+    ' happen to share identical name/facilitator/date text. ---
     Set uniqueWorkshops = CreateObject("Scripting.Dictionary")
 
     For Each cell In Selection
         workshopName = CleanText(dataWs.Cells(cell.Row, "E").Value)
         facilitatorName = CleanText(dataWs.Cells(cell.Row, "G").Value)
         workshopDate = CleanText(dataWs.Cells(cell.Row, "F").Value)
+        cellColor = cell.Interior.Color
 
         If workshopName <> "" Then
-            comboKey = workshopName & "||" & facilitatorName & "||" & workshopDate
+            comboKey = workshopName & "||" & facilitatorName & "||" & workshopDate & "||" & CStr(cellColor)
             If Not uniqueWorkshops.Exists(comboKey) Then
-                uniqueWorkshops.Add comboKey, Array(workshopName, facilitatorName, workshopDate)
+                uniqueWorkshops.Add comboKey, Array(workshopName, facilitatorName, workshopDate, cellColor)
             End If
         End If
     Next cell
@@ -49,7 +56,7 @@ Sub CreateSlidesForSelectedWorkshops()
 
     Debug.Print "Unique workshop instances found: " & uniqueWorkshops.Count
     For Each info In uniqueWorkshops.Items
-        Debug.Print " - " & info(0) & " | " & info(1) & " | " & info(2)
+        Debug.Print " - " & info(0) & " | " & info(1) & " | " & info(2) & " | color=" & info(3)
     Next info
 
     On Error Resume Next
@@ -79,10 +86,11 @@ Sub CreateSlidesForSelectedWorkshops()
         workshopName = info(0)
         facilitatorName = info(1)
         workshopDate = info(2)
+        cellColor = info(3)
 
-        Set workshopRange = BuildWorkshopRange(dataWs, workshopName, facilitatorName, workshopDate)
+        Set workshopRange = BuildWorkshopRange(dataWs, workshopName, facilitatorName, workshopDate, cellColor)
 
-        GenerateWorkshopSlide pptPres, pptLayout, dataWs, workshopName, facilitatorName, workshopDate, workshopRange
+        GenerateWorkshopSlide pptPres, pptLayout, dataWs, workshopName, facilitatorName, workshopDate, cellColor, workshopRange
     Next info
 
     Set pptPres = Nothing
@@ -106,10 +114,12 @@ Private Function CleanText(ByVal s As Variant) As String
 End Function
 
 ' Returns a Union range of every row in dataWs whose Name (E), Facilitator (G),
-' and Date (F) all match the given workshop instance. This range is what gets
-' passed downstream as "workshopRange" - GetAllValuesInRange uses it to pull
+' Date (F), AND the Interior.Color of its E cell all match the given workshop
+' instance. Color is part of the match for the same reason it's part of the
+' key in the main sub - see the comment there. This range is what gets passed
+' downstream as "workshopRange" - GetAllValuesInRange uses it to pull
 ' feedback text (col AU) only from rows belonging to THIS specific instance.
-Private Function BuildWorkshopRange(dataWs As Worksheet, workshopName As String, facilitatorName As String, workshopDate As String) As Range
+Private Function BuildWorkshopRange(dataWs As Worksheet, workshopName As String, facilitatorName As String, workshopDate As String, cellColor As Long) As Range
     Dim lastRow As Long
     Dim r As Long
     Dim result As Range
@@ -119,7 +129,8 @@ Private Function BuildWorkshopRange(dataWs As Worksheet, workshopName As String,
     For r = 2 To lastRow
         If CleanText(dataWs.Cells(r, "E").Value) = workshopName _
            And CleanText(dataWs.Cells(r, "G").Value) = facilitatorName _
-           And CleanText(dataWs.Cells(r, "F").Value) = workshopDate Then
+           And CleanText(dataWs.Cells(r, "F").Value) = workshopDate _
+           And dataWs.Cells(r, "E").Interior.Color = cellColor Then
 
             If result Is Nothing Then
                 Set result = dataWs.Cells(r, "E")
@@ -132,7 +143,7 @@ Private Function BuildWorkshopRange(dataWs As Worksheet, workshopName As String,
     Set BuildWorkshopRange = result
 End Function
 
-Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs As Worksheet, workshopName As String, facilitatorName As String, workshopDate As String, workshopRange As Range)
+Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs As Worksheet, workshopName As String, facilitatorName As String, workshopDate As String, cellColor As Long, workshopRange As Range)
     Dim pptSlide As Object
     Dim i As Long
     Dim calcWs As Worksheet
@@ -203,9 +214,9 @@ Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs
     Dim contentPct As Double
     Dim recommendedPct As Double
 
-    facilitatorPct = ComputeAgreePercent(dataWs, workshopName, facilitatorName, workshopDate, "AR")
-    contentPct = ComputeAgreePercent(dataWs, workshopName, facilitatorName, workshopDate, "AS")
-    recommendedPct = ComputeAgreePercent(dataWs, workshopName, facilitatorName, workshopDate, "AT")
+    facilitatorPct = ComputeAgreePercent(dataWs, workshopName, facilitatorName, workshopDate, cellColor, "AR")
+    contentPct = ComputeAgreePercent(dataWs, workshopName, facilitatorName, workshopDate, cellColor, "AS")
+    recommendedPct = ComputeAgreePercent(dataWs, workshopName, facilitatorName, workshopDate, cellColor, "AT")
 
     UpdatePercentLine shpFacilitator, Format(facilitatorPct, "0%")
     UpdatePercentLine shpContent, Format(contentPct, "0%")
@@ -234,15 +245,16 @@ Private Sub GenerateWorkshopSlide(pptPres As Object, pptLayout As Object, dataWs
     UpdateWorkshopInfoBox shpInfo, workshopName, facilitatorName, workshopDate, responseCount
     UpdateFeedbackTextBox shpFeedback, feedbackValues
 
-    ' --- Learning outcomes chart: scoped to THIS instance (name + facilitator + date) ---
-    UpdateWorkshopChart shpChart, workshopName, facilitatorName, workshopDate, dataWs, calcWs
+    ' --- Learning outcomes chart: scoped to THIS instance (name + facilitator + date + color) ---
+    UpdateWorkshopChart shpChart, workshopName, facilitatorName, workshopDate, cellColor, dataWs, calcWs
 
     Set pptSlide = Nothing
 End Sub
 
-' Now scoped to a specific workshop INSTANCE (name + facilitator + date),
-' not just name, so stats aren't blended across two sessions with the same name.
-Function ComputeAgreePercent(dataWs As Worksheet, workshopName As String, facilitatorName As String, workshopDate As String, colLetter As String) As Double
+' Scoped to a specific workshop INSTANCE: name + facilitator + date + the
+' Interior.Color of the row's E cell (see the comment in the main sub for why
+' color is part of the match).
+Function ComputeAgreePercent(dataWs As Worksheet, workshopName As String, facilitatorName As String, workshopDate As String, cellColor As Long, colLetter As String) As Double
     Dim lastRow As Long
     Dim r As Long
     Dim agreeCount As Long
@@ -257,7 +269,8 @@ Function ComputeAgreePercent(dataWs As Worksheet, workshopName As String, facili
     For r = 2 To lastRow
         If CleanText(dataWs.Cells(r, "E").Value) = workshopName _
            And CleanText(dataWs.Cells(r, "G").Value) = facilitatorName _
-           And CleanText(dataWs.Cells(r, "F").Value) = workshopDate Then
+           And CleanText(dataWs.Cells(r, "F").Value) = workshopDate _
+           And dataWs.Cells(r, "E").Interior.Color = cellColor Then
 
             cellVal = Trim(dataWs.Cells(r, colLetter).Value)
             If cellVal <> "" Then
@@ -811,10 +824,9 @@ End Sub
 
 ' ===================== LEARNING OUTCOMES CHART =====================
 
-' Rebuilds the "Learning Outcomes Chart" for ONE workshop instance
-' (name + facilitator + date - the same composite key and the same Data-sheet
-' columns E / G / F, compared with CleanText, that BuildWorkshopRange and
-' ComputeAgreePercent use).
+' Rebuilds the "Learning Outcomes Chart" for ONE workshop instance - name +
+' facilitator + date + the Interior.Color of the row's E cell (see the
+' comment in the main sub for why color is part of the match).
 '
 ' How it works: the counts are written into the chart's EMBEDDED worksheet
 ' (what "Edit Data" shows), and the chart is then re-bound to that range with
@@ -826,6 +838,7 @@ Private Sub UpdateWorkshopChart(ByVal shpChart As Object, _
         ByVal workshopName As String, _
         ByVal facilitatorName As String, _
         ByVal workshopDate As String, _
+        ByVal cellColor As Long, _
         ByVal dataWs As Worksheet, _
         ByVal calcWs As Worksheet)
 
@@ -915,7 +928,8 @@ Private Sub UpdateWorkshopChart(ByVal shpChart As Object, _
         rowLabels(4 - k) = "Can " & CleanText(calcWs.Range(labelCol & (labelStartRow + (k - 1))).Value)
     Next k
 
-    ' ---- Count ONLY rows belonging to this workshop instance ----
+    ' ---- Count ONLY rows belonging to this workshop instance (name +
+    ' facilitator + date + E-cell fill color) ----
     Dim colNums(1 To 3) As Long
     For k = 1 To 3
         colNums(k) = dataWs.Range(dataCols(k - 1) & "1").Column
@@ -931,7 +945,8 @@ Private Sub UpdateWorkshopChart(ByVal shpChart As Object, _
     For r = 2 To lastDataRow   ' row 1 of Data tab is headers
         If CleanText(dataWs.Cells(r, "E").Value) = workshopName _
            And CleanText(dataWs.Cells(r, "G").Value) = facilitatorName _
-           And CleanText(dataWs.Cells(r, "F").Value) = workshopDate Then
+           And CleanText(dataWs.Cells(r, "F").Value) = workshopDate _
+           And dataWs.Cells(r, "E").Interior.Color = cellColor Then
 
             matched = matched + 1
             For k = 1 To 3
@@ -948,7 +963,7 @@ Private Sub UpdateWorkshopChart(ByVal shpChart As Object, _
     Next r
 
     Debug.Print "Chart: " & matched & " matching response row(s) for '" & workshopName & "' | " & _
-                facilitatorName & " | " & workshopDate
+                facilitatorName & " | " & workshopDate & " | color=" & cellColor
     If matched = 0 Then Debug.Print "WARNING: zero rows matched for the chart."
 
     ' ---- Write into the embedded workbook, then re-bind the chart to it ----
@@ -1009,3 +1024,5 @@ WorkbookError:
     If Not wb Is Nothing Then wb.Close
     On Error GoTo 0
 End Sub
+
+
